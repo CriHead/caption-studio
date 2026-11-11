@@ -99,18 +99,27 @@ export async function renderMp4(spec, onProgress) {
         let held = null;
         let index = 0;
         const stamp = () => index * frameDur;
-        for await (const sample of samples.samples(0, duration + frameDur)) {
-          while (index < frames && stamp() + 1e-4 < sample.timestamp) {
-            paint(held, stamp(), held?.displayWidth, held?.displayHeight);
-            await videoSource.add(stamp(), frameDur, { keyFrame: index % (FPS * 2) === 0 });
-            index += 1;
-            if (index % 8 === 0) {
-              onProgress?.(index / frames);
-              await yieldThread();
+        try {
+          for await (const sample of samples.samples(0, duration + frameDur)) {
+            const small = await shrinkSample(sample, width, height);
+            while (index < frames && stamp() + 1e-4 < small.timestamp) {
+              paint(held, stamp(), held?.displayWidth, held?.displayHeight);
+              await videoSource.add(stamp(), frameDur, { keyFrame: index % (FPS * 2) === 0 });
+              index += 1;
+              if (index % 8 === 0) {
+                onProgress?.(index / frames);
+                await yieldThread();
+              }
             }
+            held?.close();
+            held = small;
           }
+        } catch (error) {
           held?.close();
-          held = sample;
+          held = null;
+          if (index > 0) throw error;
+          await renderByPlayback(spec.file, paint, videoSource, frames, frameDur, onProgress);
+          index = frames;
         }
         while (index < frames) {
           paint(held, stamp(), held?.displayWidth, held?.displayHeight);
@@ -140,6 +149,62 @@ export async function renderMp4(spec, onProgress) {
   const blob = await sink.file();
   if (!blob || blob.size < 1000) throw new Error("The video file came out empty.");
   return { blob, audioCodec };
+}
+
+async function shrinkSample(sample, width, height) {
+  const wide = sample.displayWidth > width * 1.1 || sample.displayHeight > height * 1.1;
+  if (!wide || typeof sample.transform !== "function") return sample;
+  try {
+    const small = await sample.transform({ width, height, fit: "cover" });
+    if (small !== sample) sample.close();
+    return small;
+  } catch {
+    return sample;
+  }
+}
+
+async function renderByPlayback(file, paint, videoSource, frames, frameDur, onProgress) {
+  const url = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  video.playsInline = true;
+  video.muted = true;
+  video.preload = "auto";
+  video.src = url;
+  try {
+    await new Promise((resolve, reject) => {
+      video.onloadeddata = () => resolve();
+      video.onerror = () => reject(new Error("This browser could not decode that video."));
+    });
+    for (let index = 0; index < frames; index++) {
+      await seekVideo(video, index * frameDur);
+      paint(video, index * frameDur, video.videoWidth, video.videoHeight);
+      await videoSource.add(index * frameDur, frameDur, { keyFrame: index % (FPS * 2) === 0 });
+      if (index % 8 === 0) {
+        onProgress?.(index / frames);
+        await yieldThread();
+      }
+    }
+  } finally {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    URL.revokeObjectURL(url);
+  }
+}
+
+function seekVideo(video, time) {
+  return new Promise((resolve) => {
+    const done = () => {
+      video.removeEventListener("seeked", done);
+      resolve();
+    };
+    if (Math.abs((video.currentTime || 0) - time) < 0.001) {
+      resolve();
+      return;
+    }
+    video.addEventListener("seeked", done);
+    try { video.currentTime = time; } catch { done(); }
+  });
 }
 
 async function streamAudio(file, audioSource, duration) {

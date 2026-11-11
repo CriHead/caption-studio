@@ -15,6 +15,33 @@ import { burstsAt } from "./emoji.js";
 import { familyName, fontStack } from "./fonts.js";
 
 const REDUCED = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+const layoutCache = new Map();
+const textRasters = new Map();
+let measureCtx = null;
+
+function remember(cache, key, value, limit) {
+  cache.set(key, value);
+  if (cache.size <= limit) return;
+  const oldest = cache.keys().next().value;
+  cache.delete(oldest);
+}
+
+function recall(cache, key) {
+  const hit = cache.get(key);
+  if (!hit) return null;
+  cache.delete(key);
+  cache.set(key, hit);
+  return hit;
+}
+
+function cloneLine(line) {
+  return {
+    width: line.width,
+    height: line.height,
+    scale: line.scale,
+    items: line.items.map((item) => ({ ...item })),
+  };
+}
 
 export function resolveLook(rawStyle, palette, vertical) {
   const pal = palette || null;
@@ -62,6 +89,15 @@ export function paletteById(catalog, id) {
   if (!id) return null;
   if (catalog.palettes[id]) return catalog.palettes[id];
   return paletteFromHex(id);
+}
+
+/** Captions, letterbox, emoji, and the link button. Does not touch the picture. */
+export function drawOverlay(ctx, spec) {
+  const { width, height } = spec;
+  if (spec.letterbox) drawLetterbox(ctx, width, height);
+  drawCaptions(ctx, spec);
+  if (spec.emojiOn) drawEmoji(ctx, spec);
+  if (spec.cta) drawCta(ctx, spec);
 }
 
 export function drawFrame(ctx, spec) {
@@ -175,6 +211,22 @@ function drawCaptions(ctx, spec) {
 }
 
 function layoutLine(ctx, group, look, maxWidth, direction, letterMode) {
+  const key = [
+    letterMode ? "L" : "W",
+    direction,
+    maxWidth.toFixed(1),
+    look.bodyFamily,
+    look.displayFamily,
+    look.fontSize,
+    look.keywordSize,
+    look.primary,
+    look.highlight,
+    look.spacing,
+    group.words.map((word, index) => `${word.text}:${group.flags[index] ? 1 : 0}`).join(" "),
+  ].join("|");
+  const cached = recall(layoutCache, key);
+  if (cached) return cloneLine(cached);
+
   const items = [];
   group.words.forEach((word, index) => {
     const keyword = group.flags[index];
@@ -251,7 +303,9 @@ function layoutLine(ctx, group, look, maxWidth, direction, letterMode) {
     });
   }
   const height = Math.max(look.fontSize * scale, ...items.map((item) => item.size));
-  return { items, width: total, height, scale };
+  const line = { items, width: total, height, scale };
+  remember(layoutCache, key, line, 48);
+  return cloneLine(line);
 }
 
 function drawBubble(ctx, line, look) {
@@ -307,27 +361,53 @@ function drawKaraoke(ctx, line, look, time) {
 }
 
 function paintText(ctx, text, x, y, item, look, align = "left") {
-  ctx.font = fontStack(item.size, item.family);
-  ctx.textAlign = align;
-  ctx.textBaseline = "middle";
-  ctx.lineJoin = "round";
-  ctx.miterLimit = 2;
-  ctx.shadowColor = "transparent";
-  ctx.lineWidth = Math.max(2, look.outlineW * 2);
-  ctx.strokeStyle = look.outline;
-  if (look.borderStyle !== 3) ctx.strokeText(text, x, y);
-  ctx.fillStyle = item.color;
+  const raster = textRaster(text, item, look);
+  let dx = x - raster.pad;
+  if (align === "center") dx = x - raster.canvas.width / 2;
+  else if (align === "right") dx = x - (raster.canvas.width - raster.pad);
+  ctx.drawImage(raster.canvas, dx, y - raster.canvas.height / 2);
+}
+
+function textRaster(text, item, look) {
+  const size = Math.round(item.size * 10) / 10;
+  const key = [
+    text, size, item.family, item.color, look.outline, look.outlineW,
+    look.shadow, look.glow, look.borderStyle,
+  ].join("|");
+  const hit = recall(textRasters, key);
+  if (hit) return hit;
+  if (!measureCtx) measureCtx = document.createElement("canvas").getContext("2d");
+  measureCtx.font = fontStack(size, item.family);
+  const textWidth = measureCtx.measureText(text).width;
+  const pad = Math.ceil(Math.max(size * 0.5, look.outlineW * 4, (look.shadow || 0) * 4, 18));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(2, Math.ceil(textWidth + pad * 2));
+  canvas.height = Math.max(2, Math.ceil(size + pad * 2));
+  const g = canvas.getContext("2d");
+  g.font = fontStack(size, item.family);
+  g.textAlign = "left";
+  g.textBaseline = "middle";
+  g.lineJoin = "round";
+  g.miterLimit = 2;
+  g.lineWidth = Math.max(2, look.outlineW * 2);
+  g.strokeStyle = look.outline;
+  const originX = pad;
+  const originY = canvas.height / 2;
+  if (look.borderStyle !== 3) g.strokeText(text, originX, originY);
+  g.fillStyle = item.color;
   if (look.shadow > 0) {
-    ctx.shadowColor = "rgba(0,0,0,0.55)";
-    ctx.shadowBlur = look.shadow * 1.15;
-    ctx.shadowOffsetY = look.shadow * 0.45;
-    ctx.shadowOffsetX = look.shadow * 0.12;
+    g.shadowColor = "rgba(0,0,0,0.55)";
+    g.shadowBlur = look.shadow * 1.15;
+    g.shadowOffsetY = look.shadow * 0.45;
+    g.shadowOffsetX = look.shadow * 0.12;
   } else if (look.borderStyle !== 3) {
-    ctx.shadowColor = look.glow;
-    ctx.shadowBlur = Math.max(8, look.outlineW * 2.4);
+    g.shadowColor = look.glow;
+    g.shadowBlur = Math.max(8, look.outlineW * 2.4);
   }
-  ctx.fillText(text, x, y);
-  ctx.shadowColor = "transparent";
+  g.fillText(text, originX, originY);
+  const raster = { canvas, pad };
+  remember(textRasters, key, raster, 64);
+  return raster;
 }
 
 function drawEmoji(ctx, spec) {
@@ -366,11 +446,11 @@ function drawCta(ctx, spec) {
   ctx.lineWidth = 2;
   ctx.strokeStyle = spec.look.outline;
   ctx.stroke();
-  ctx.font = fontStack(34, spec.look.displayFamily || spec.look.bodyFamily);
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = "#fff";
-  ctx.fillText(label, cx, cy);
+  paintText(ctx, label, cx, cy, {
+    size: 34,
+    family: spec.look.displayFamily || spec.look.bodyFamily,
+    color: "#fff",
+  }, { ...spec.look, borderStyle: 3, outlineW: 0, shadow: 0, glow: "transparent" }, "center");
 
   const fly = Math.max(0.25, (window.end - window.start) * 0.45);
   const p = clamp01(local / fly);

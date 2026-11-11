@@ -1,12 +1,12 @@
 import catalog from "./catalog.json";
 import { groupWords, wordsFromText, chunksToWords } from "./captions.js";
-import { drawFrame, paletteById, resolveLook } from "./draw.js";
+import { drawFrame, drawOverlay, paletteById, resolveLook } from "./draw.js";
 import { burstFiles, emojiFileForWord } from "./emoji.js";
 import { ensureFonts, familyName, scriptFontFile, scriptForText } from "./fonts.js";
-import { decodeAudio, fileKind, loadImage, probeVideo, sliceAudio, toMono16k } from "./media.js";
+import { eachPcmWindow, fileKind, loadImage } from "./media.js";
 import { renderMp4 } from "./render.js";
 import { clearSession, loadSession, saveCaptions, saveMedia, saveSettings, saveVoice } from "./session.js";
-import { transcribeAudio } from "./transcribe.js";
+import { releaseTranscriber, transcribeAudio } from "./transcribe.js";
 
 const MAX_BYTES = 300 * 1024 * 1024;
 const MAX_SECONDS = 5 * 60;
@@ -32,7 +32,9 @@ const player = document.getElementById("player");
 const save = document.getElementById("save");
 const go = document.getElementById("go");
 const canvas = document.getElementById("stage");
-const ctx = canvas.getContext("2d", { alpha: false });
+const ctx = canvas.getContext("2d", { alpha: true });
+const stageFrame = document.getElementById("stageFrame");
+const BUSY_KEY = "caption-studio-busy";
 const playBtn = document.getElementById("play");
 const scrub = document.getElementById("scrub");
 const timeLabel = document.getElementById("timeLabel");
@@ -88,16 +90,86 @@ const state = {
   resultUrl: "",
 };
 
-const previewVideo = document.createElement("video");
+let lastPaintKey = "";
+
+const previewVideo = document.getElementById("previewVideo");
 previewVideo.playsInline = true;
-previewVideo.loop = true;
+previewVideo.muted = true;
+previewVideo.autoplay = false;
 previewVideo.preload = "metadata";
 
 const emojiImages = {};
 
 buildChoices();
 wire();
-restoreSession();
+boot();
+
+function lightDevice() {
+  const ua = navigator.userAgent || "";
+  const ios = /iP(hone|ad|od)/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const low = typeof navigator.deviceMemory === "number" && navigator.deviceMemory <= 4;
+  return ios || low;
+}
+
+function markBusy(reason) {
+  try { localStorage.setItem(BUSY_KEY, reason || "1"); } catch { /* private mode */ }
+}
+
+function clearBusy(reason) {
+  try {
+    if (reason && localStorage.getItem(BUSY_KEY) !== reason) return;
+    localStorage.removeItem(BUSY_KEY);
+  } catch { /* ignore */ }
+}
+
+function friendly() {
+  const text = "Something went wrong on this device. Your clip is still here if it was saved. You can try again, or start over.";
+  setStatus(text, true);
+  studio.error = text;
+}
+
+function boot() {
+  window.addEventListener("error", () => friendly());
+  window.addEventListener("unhandledrejection", (event) => {
+    event.preventDefault();
+    friendly();
+  });
+  if (lightDevice()) modelEl.value = "tiny";
+  try {
+    if (localStorage.getItem(BUSY_KEY)) {
+      showRecovery();
+      studio.ready = true;
+      studio.blocked = true;
+      return;
+    }
+  } catch { /* ignore */ }
+  restoreSession();
+}
+
+function showRecovery() {
+  document.getElementById("recovery").hidden = false;
+  document.getElementById("stageEmpty").hidden = false;
+  setStatus("Last session stopped unexpectedly.");
+}
+
+function hideRecovery() {
+  document.getElementById("recovery").hidden = true;
+}
+
+async function resumeSaved(lighter) {
+  hideRecovery();
+  clearBusy();
+  if (lighter) {
+    state.quality = "720";
+    modelEl.value = "tiny";
+    document.querySelectorAll("[data-quality]").forEach((node) => {
+      node.classList.toggle("on", node.dataset.quality === "720");
+    });
+    rememberSettings();
+  }
+  studio.blocked = false;
+  await restoreSession();
+}
 
 function buildChoices() {
   const styles = document.getElementById("styles");
@@ -284,6 +356,7 @@ function wire() {
     state.playing = false;
     playBtn.textContent = "Play";
     previewVideo.pause();
+    clearBusy("play");
     state.scrubTime = (Number(scrub.value) / 1000) * state.duration;
     if (state.kind === "video") {
       previewVideo.currentTime = state.scrubTime;
@@ -292,10 +365,15 @@ function wire() {
     paint();
   });
   previewVideo.addEventListener("loadedmetadata", () => {
+    if (!state.playing) clearBusy("preview");
+    resizeCanvas();
     if (state.kind !== "video" || state.playing) return;
     if (Math.abs((previewVideo.currentTime || 0) - state.scrubTime) > 0.08) {
       try { previewVideo.currentTime = state.scrubTime; } catch { /* seek can wait until data arrives */ }
     }
+  });
+  previewVideo.addEventListener("ended", () => {
+    stopPlay();
   });
   previewVideo.addEventListener("loadeddata", () => {
     if (state.kind === "video" && !state.playing) paint();
@@ -352,6 +430,10 @@ function wire() {
     rememberSettings();
     restartPreview();
   });
+  document.getElementById("resume").addEventListener("click", () => resumeSaved(false));
+  document.getElementById("lighter").addEventListener("click", () => resumeSaved(true));
+  document.getElementById("forget").addEventListener("click", () => startOver());
+  document.getElementById("readSpeech").addEventListener("click", () => scheduleSpeech(true));
 }
 
 function selectGroup(selector, button, kind) {
@@ -381,10 +463,24 @@ function outputSpec() {
 }
 
 function resizeCanvas() {
-  const { width, height } = outputSpec();
+  const out = outputSpec();
+  if (state.file) {
+    stageFrame.classList.add("has-media");
+    stageFrame.style.setProperty("--frame-w", String(out.width));
+    stageFrame.style.setProperty("--frame-h", String(out.height));
+  } else {
+    stageFrame.classList.remove("has-media");
+  }
+  const rect = stageFrame.getBoundingClientRect();
+  const cssW = Math.max(2, Math.round(rect.width || 320));
+  const cssH = Math.max(2, Math.round(rect.height || cssW * out.height / out.width));
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.max(2, Math.round(cssW * dpr));
+  const height = Math.max(2, Math.round(cssH * dpr));
   if (canvas.width !== width || canvas.height !== height) {
     canvas.width = width;
     canvas.height = height;
+    lastPaintKey = "";
   }
 }
 
@@ -481,7 +577,13 @@ function rememberMedia() {
     sourceWidth: state.sourceWidth,
     sourceHeight: state.sourceHeight,
   };
-  return guarded(() => saveMedia(record));
+  return guarded(async () => {
+    try {
+      await saveMedia(record);
+    } catch {
+      setStatus("This clip is too large to keep after a reload, but you can still use it now.");
+    }
+  });
 }
 
 function rememberVoice() {
@@ -505,10 +607,12 @@ function releaseImage() {
 
 async function restoreSession() {
   try {
-    setStatus("Checking for a saved clip…");
+    markBusy("restore");
+    setStatus("Opening your saved clip…");
     const saved = await loadSession();
     const media = saved?.media;
     if (!media?.blob) {
+      clearBusy("restore");
       setStatus("Choose a photo or a short video to begin.");
       return;
     }
@@ -544,14 +648,13 @@ async function restoreSession() {
     studio.restored = true;
     resizeCanvas();
     await restartPreview();
-    if (!textEl.value.trim() && !state.heardWords.length && state.kind === "video") {
-      const audio = await pcmFromFile(file, state.duration);
-      state.pcm = audio?.pcm || null;
-      scheduleSpeech();
-    } else {
-      setStatus("Your clip is back. It stayed on this device.");
-    }
+    clearBusy("restore");
+    updateReadButton();
+    setStatus(state.heardWords.length || textEl.value.trim()
+      ? "Your clip is back. Press play when you want to watch it."
+      : "Your clip is back. Press Read the speech when you want captions.");
   } catch (error) {
+    clearBusy();
     console.warn("Could not restore the saved clip.", error);
     setStatus("Choose a photo or a short video to begin.");
   } finally {
@@ -613,6 +716,8 @@ function reflectControls() {
 }
 
 async function startOver() {
+  clearBusy();
+  hideRecovery();
   saveEpoch += 1;
   speechJob += 1;
   state.job += 1;
@@ -666,17 +771,58 @@ function showFileName() {
   document.getElementById("reset").hidden = !state.file;
   document.getElementById("stageEmpty").hidden = Boolean(state.file);
   document.getElementById("toCaptions").disabled = !state.file;
+  stageFrame.classList.toggle("is-video", state.kind === "video");
+  stageFrame.classList.toggle("is-photo", state.kind === "image");
   studio.fileName = state.file ? state.file.name : "";
+  updateReadButton();
+}
+
+function updateReadButton() {
+  const button = document.getElementById("readSpeech");
+  if (!button) return;
+  button.hidden = !(state.kind === "video" && state.file && !state.heardWords.length && !textEl.value.trim());
+}
+
+function previewMeta() {
+  return {
+    duration: previewVideo.duration,
+    width: previewVideo.videoWidth,
+    height: previewVideo.videoHeight,
+  };
+}
+
+function waitForPreviewMeta() {
+  if (previewVideo.readyState >= 1 && Number.isFinite(previewVideo.duration)) {
+    return Promise.resolve(previewMeta());
+  }
+  return new Promise((resolve, reject) => {
+    const ok = () => {
+      cleanup();
+      resolve(previewMeta());
+    };
+    const bad = () => {
+      cleanup();
+      reject(new Error("Could not read that video."));
+    };
+    const cleanup = () => {
+      previewVideo.removeEventListener("loadedmetadata", ok);
+      previewVideo.removeEventListener("error", bad);
+    };
+    previewVideo.addEventListener("loadedmetadata", ok);
+    previewVideo.addEventListener("error", bad);
+  });
 }
 
 function attachPreviewUrl(file) {
   if (state.videoUrl) URL.revokeObjectURL(state.videoUrl);
   state.videoUrl = "";
+  previewVideo.pause();
   if (!file || state.kind !== "video") {
     previewVideo.removeAttribute("src");
     previewVideo.load();
     return;
   }
+  markBusy("preview");
   state.videoUrl = URL.createObjectURL(file);
   previewVideo.preload = "metadata";
   previewVideo.src = state.videoUrl;
@@ -707,15 +853,11 @@ async function onFile(file) {
       state.sourceWidth = state.image.width;
       state.sourceHeight = state.image.height;
       state.duration = STILL_SECONDS;
-      if (state.voiceFile) {
-        const audio = await pcmFromFile(state.voiceFile, MAX_SECONDS);
-        state.pcm = audio?.pcm || null;
-        if (audio) state.duration = Math.max(1, Math.min(MAX_SECONDS, audio.duration));
-      }
       setOrient(state.image.height > state.image.width, { silent: true });
     } else if (state.kind === "video") {
       setStatus("Reading your video…");
-      const meta = await probeVideo(file);
+      attachPreviewUrl(file);
+      const meta = await waitForPreviewMeta();
       if (!Number.isFinite(meta.duration) || meta.duration <= 0.05) {
         throw new Error("Could not read the length of that video.");
       }
@@ -723,15 +865,9 @@ async function onFile(file) {
         throw new Error(`Please keep videos to 5 minutes or less (this one is ${Math.round(meta.duration / 60)} min).`);
       }
       state.duration = meta.duration;
-      state.sourceWidth = meta.width;
-      state.sourceHeight = meta.height;
-      attachPreviewUrl(file);
-      setOrient(meta.height > meta.width, { silent: true });
-      if (!state.voiceFile) {
-        setStatus("Reading the audio…");
-        const audio = await pcmFromFile(file, state.duration);
-        state.pcm = audio?.pcm || null;
-      }
+      state.sourceWidth = meta.width || state.sourceWidth;
+      state.sourceHeight = meta.height || state.sourceHeight;
+      setOrient(state.sourceHeight > state.sourceWidth, { silent: true });
       if (job !== state.job) return;
     } else {
       throw new Error("Please upload a video (mp4, mov, webm) or an image (png, jpg, webp).");
@@ -766,12 +902,9 @@ async function onAudio(file) {
   const job = ++state.job;
   try {
     setStatus("Reading the voice track…");
-    const decoded = await pcmFromFile(file, state.kind === "video" ? state.duration : MAX_SECONDS);
-    if (!decoded) throw new Error("Could not read that audio file.");
     if (job !== state.job) return;
     state.voiceFile = file;
-    state.pcm = decoded.pcm;
-    if (state.kind === "image") state.duration = Math.max(1, Math.min(MAX_SECONDS, decoded.duration));
+    state.pcm = null;
     state.heardWords = [];
     state.transcript = "";
     await rememberVoice();
@@ -783,46 +916,72 @@ async function onAudio(file) {
   }
 }
 
-async function pcmFromFile(file, limit) {
-  const decoded = await decodeAudio(file);
-  if (!decoded) return null;
-  const clipped = sliceAudio(decoded, limit || decoded.duration);
-  const pcm = toMono16k(clipped);
-  return { pcm, duration: clipped.duration };
-}
-
 let speechJob = 0;
 
-function scheduleSpeech() {
+function scheduleSpeech(force) {
   const job = ++speechJob;
   const typed = textEl.value.trim();
-  if (typed || state.heardWords.length || !state.pcm) {
-    if (!typed && !state.heardWords.length && state.kind === "image" && !state.pcm) {
+  const source = state.voiceFile || (state.kind === "video" ? state.file : null);
+  if (!force && (typed || state.heardWords.length || !source)) {
+    if (!typed && !state.heardWords.length && state.kind === "image" && !state.voiceFile) {
       setStatus("For a photo, type a short caption, or add a voice track.");
     } else if (state.file) {
       setStatus("Preview ready. It stays on this device.");
     }
     studio.words = activeWords();
     studio.transcript = state.transcript;
-    state.pcm = null;
+    updateReadButton();
     return;
   }
-  setStatus("Transcribing speech on this device…");
+  if (!source) {
+    setStatus("Add a video or a voice track to read the speech.", true);
+    return;
+  }
+  setStatus("Reading the audio on this device…");
   setProgress(0.08);
   const started = performance.now();
-  const pcm = state.pcm;
-  state.pcm = null;
   studio.transcribeStarts += 1;
-  transcribeAudio(pcm, {
-    model: modelEl.value,
-    language: langEl.value === "auto" ? null : langEl.value,
-    onProgress: (progress) => {
-      if (job !== speechJob) return;
-      if (progress.message) setStatus(progress.message);
-      if (progress.ratio != null) setProgress(0.08 + progress.ratio * 0.5);
-    },
-  }).then((result) => {
+  markBusy("transcribe");
+  const prefer = lightDevice() ? "wasm" : undefined;
+  const model = lightDevice() ? "tiny" : modelEl.value;
+  const merged = [];
+  const texts = [];
+  let device = "";
+  let modelName = "";
+  let chunkCount = 0;
+  eachPcmWindow(source, 30, async ({ pcm, start }) => {
     if (job !== speechJob) return;
+    chunkCount += 1;
+    const result = await transcribeAudio(pcm, {
+      model,
+      language: langEl.value === "auto" ? null : langEl.value,
+      prefer,
+      keepWorker: true,
+      onProgress: (progress) => {
+        if (job !== speechJob) return;
+        if (progress.message) setStatus(progress.message);
+        if (progress.ratio != null) setProgress(0.08 + progress.ratio * 0.7);
+      },
+    });
+    device = result.device || device;
+    modelName = result.model || modelName;
+    if (result.text) texts.push(result.text.trim());
+    for (const chunk of result.chunks || []) {
+      const stamp = chunk.timestamp || [];
+      const wordStart = (Number(stamp[0]) || 0) + start;
+      const wordEnd = Math.max(wordStart + 0.05, (Number(stamp[1]) || Number(stamp[0]) || 0) + start);
+      merged.push({ text: chunk.text, timestamp: [wordStart, wordEnd] });
+    }
+  }).then((found) => {
+    releaseTranscriber();
+    clearBusy("transcribe");
+    if (job !== speechJob) return;
+    if (!found && !merged.length) {
+      setStatus("No speech track was found. Type a caption instead.", true);
+      updateReadButton();
+      return;
+    }
+    const result = { text: texts.join(" "), chunks: merged, device, model: modelName, chunkCount };
     state.transcript = result.text;
     state.heardWords = chunksToWords(result, state.duration);
     studio.transcript = result.text;
@@ -842,7 +1001,9 @@ function scheduleSpeech() {
     renderLines();
     return restartPreview();
   }).catch((error) => {
+    releaseTranscriber();
     if (job !== speechJob) return;
+    clearBusy("transcribe");
     studio.error = error.message;
     setStatus(error.message || "Could not transcribe that audio. You can type the caption instead.", true);
   });
@@ -991,8 +1152,47 @@ function sceneAt(time) {
   };
 }
 
+function currentPreviewTime() {
+  if (state.kind === "video" && state.playing) return previewVideo.currentTime || state.scrubTime;
+  return state.scrubTime;
+}
+
 function paint() {
-  drawFrame(ctx, sceneAt(state.kind === "video" && state.playing ? previewVideo.currentTime || state.scrubTime : state.scrubTime));
+  resizeCanvas();
+  const time = currentPreviewTime();
+  const key = [
+    state.kind,
+    state.styleId,
+    state.animation,
+    state.placement,
+    state.paletteId,
+    state.motion,
+    state.letterbox,
+    emojiEl.checked,
+    ctaEl.value,
+    textEl.value,
+    canvas.width,
+    canvas.height,
+    Math.round(time * 20),
+  ].join("|");
+  if (key === lastPaintKey) return;
+  lastPaintKey = key;
+  const out = outputSpec();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(canvas.width / out.width, 0, 0, canvas.height / out.height, 0, 0);
+  const scene = sceneAt(time);
+  scene.width = out.width;
+  scene.height = out.height;
+  if (state.kind === "video") {
+    scene.source = null;
+    scene.still = false;
+    drawOverlay(ctx, scene);
+    return;
+  }
+  scene.source = state.image;
+  scene.still = true;
+  drawFrame(ctx, scene);
 }
 
 function syncScrub() {
@@ -1034,9 +1234,11 @@ function togglePlay() {
   state.playing = true;
   playBtn.textContent = "Pause";
   if (state.kind === "video") {
-    previewVideo.currentTime = state.scrubTime;
-    previewVideo.play().catch(() => stopPlay());
-    requestAnimationFrame(tickVideo);
+    markBusy("play");
+    try { previewVideo.currentTime = state.scrubTime; } catch { /* the element may not be ready yet */ }
+    previewVideo.play().then(() => {
+      requestAnimationFrame(tickVideo);
+    }).catch(() => stopPlay());
   } else {
     playOrigin = performance.now();
     playFrom = state.scrubTime;
@@ -1048,6 +1250,7 @@ function stopPlay() {
   state.playing = false;
   playBtn.textContent = "Play";
   previewVideo.pause();
+  clearBusy("play");
 }
 
 function tickVideo() {
@@ -1098,7 +1301,9 @@ async function makeVideo() {
       : "Type a caption, or wait for the speech transcript.", true);
     return;
   }
+  releaseTranscriber();
   stopPlay();
+  markBusy("render");
   go.disabled = true;
   studio.phase = "rendering";
   studio.error = null;
@@ -1162,6 +1367,7 @@ async function makeVideo() {
     studio.error = error?.message || String(error);
     setStatus(studio.error, true);
   } finally {
+    clearBusy("render");
     go.disabled = false;
   }
 }
