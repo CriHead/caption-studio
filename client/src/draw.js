@@ -13,6 +13,7 @@ import {
 } from "./captions.js";
 import { burstsAt } from "./emoji.js";
 import { familyName, fontStack } from "./fonts.js";
+import { captionPoint } from "./place.js";
 
 const REDUCED = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 const layoutCache = new Map();
@@ -160,14 +161,19 @@ function drawCaptions(ctx, spec) {
   }
   const local = spec.time - group.start;
   const span = Math.max(0.2, group.end - group.start);
-  const anchor = anchorFor(
-    spec.placement,
-    spec.width,
-    spec.height,
-    look.marginV,
-    group.index,
-    look.defaultPlacement,
-  );
+  const smart = spec.placeMode === "move"
+    ? captionPoint(spec.time, spec.groups, spec.keepOut)
+    : null;
+  const anchor = smart
+    ? { x: smart.x * spec.width, y: smart.y * spec.height, key: "smart" }
+    : anchorFor(
+      spec.placeMode === "bottom" ? "bottom" : spec.placement,
+      spec.width,
+      spec.height,
+      look.marginV,
+      group.index,
+      look.defaultPlacement,
+    );
   const motion = motionOffset(look.motion, local);
   const script = spec.script;
   const letterMode = isLetterAnimation(spec.animation) && !look.karaoke && !prefersWholeWords(script);

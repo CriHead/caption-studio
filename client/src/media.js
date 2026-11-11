@@ -106,14 +106,17 @@ export async function eachPcmWindow(file, seconds, onWindow) {
     let covered = 0;
     const flush = async () => {
       if (!batch.length) return;
-      const window = windowTo16k(batch);
+      const window = mixWindow(batch);
+      for (const piece of batch) {
+        try { piece.close?.(); } catch { /* already released */ }
+      }
       batch = [];
       covered = 0;
       if (window) await onWindow(window);
     };
     for await (const piece of sink.buffers()) {
       batch.push(piece);
-      covered += piece.duration || piece.buffer.duration || 0;
+      covered += piece.duration || piece.buffer?.duration || 0;
       if (covered >= seconds) await flush();
     }
     await flush();
@@ -123,25 +126,31 @@ export async function eachPcmWindow(file, seconds, onWindow) {
   }
 }
 
-function windowTo16k(pieces) {
+function mixWindow(pieces) {
   const sampleRate = pieces[0].buffer.sampleRate;
-  const channels = Math.min(2, pieces[0].buffer.numberOfChannels || 1);
   const start = pieces[0].timestamp || 0;
   const last = pieces[pieces.length - 1];
-  const end = (last.timestamp || 0) + (last.duration || last.buffer.duration || 0);
-  const length = Math.max(1, Math.ceil((end - start) * sampleRate));
-  const ctx = contextFor(sampleRate);
-  const buffer = ctx.createBuffer(channels, length, sampleRate);
+  const end = Math.min(start + 40, (last.timestamp || 0) + (last.duration || last.buffer.duration || 0));
+  const outLength = Math.max(1, Math.round(Math.max(0.05, end - start) * 16000));
+  const pcm = new Float32Array(outLength);
+  const ratio = sampleRate / 16000;
   for (const piece of pieces) {
-    const offset = Math.max(0, Math.round(((piece.timestamp || 0) - start) * sampleRate));
-    for (let channel = 0; channel < channels; channel++) {
-      const src = piece.buffer.getChannelData(Math.min(channel, piece.buffer.numberOfChannels - 1));
-      const dst = buffer.getChannelData(channel);
-      const count = Math.min(src.length, Math.max(0, dst.length - offset));
-      if (count > 0) dst.set(src.subarray(0, count), offset);
+    const channels = Math.max(1, piece.buffer.numberOfChannels || 1);
+    const data = [];
+    for (let channel = 0; channel < channels; channel += 1) data.push(piece.buffer.getChannelData(channel));
+    const origin = ((piece.timestamp || 0) - start) * 16000;
+    const length = data[0].length;
+    for (let index = 0; index < outLength; index += 1) {
+      const srcIndex = (index - origin) * ratio;
+      if (srcIndex < 0 || srcIndex >= length - 1) continue;
+      const left = Math.floor(srcIndex);
+      const frac = srcIndex - left;
+      let sample = 0;
+      for (const channel of data) sample += channel[left] * (1 - frac) + channel[left + 1] * frac;
+      pcm[index] += sample / channels;
     }
   }
-  return { pcm: toMono16k(buffer), start };
+  return { pcm, start };
 }
 
 export async function decodeAudio(file) {

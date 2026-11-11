@@ -23,23 +23,23 @@
 :root {
   --bg: #0b1020;
   --bg-2: #121a2e;
-  --surface: rgba(18, 26, 46, 0.78);
-  --card: rgba(24, 34, 58, 0.72);
+  --surface: rgba(14, 22, 42, 0.82);
+  --card: rgba(18, 28, 52, 0.78);
   --field: rgba(11, 16, 32, 0.55);
-  --ink: #f4f6fb;
-  --muted: #b7c0d4;
-  --line: rgba(214, 222, 240, 0.14);
-  --accent: #6d7cff;
-  --accent-2: #a78bfa;
-  --accent-ink: #0b1020;
-  --accent-text: #c4b5fd;
+  --ink: #f4f7ff;
+  --muted: #c5d4ea;
+  --line: rgba(214, 228, 255, 0.16);
+  --accent: #8ec5ff;
+  --accent-2: #a7b8ff;
+  --accent-ink: #13213c;
+  --accent-text: #b7d6ff;
   --stage: #0b1020;
   --danger: #f0b4c0;
   --shadow: 0 18px 50px rgba(5, 8, 20, 0.45);
-  --glow: 0 10px 28px rgba(109, 124, 255, 0.28);
+  --glow: 0 10px 28px rgba(142, 197, 255, 0.28);
   --wash:
-    radial-gradient(900px 480px at 0% -10%, rgba(109, 124, 255, 0.18), transparent 55%),
-    radial-gradient(700px 420px at 100% 0%, rgba(167, 139, 250, 0.14), transparent 50%),
+    radial-gradient(900px 480px at 0% -10%, rgba(142, 197, 255, 0.16), transparent 55%),
+    radial-gradient(700px 420px at 100% 0%, rgba(167, 184, 255, 0.12), transparent 50%),
     linear-gradient(180deg, #121a2e 0%, #0b1020 48%);
   font-family: Inter, "Segoe UI", system-ui, sans-serif;
   color: var(--ink);
@@ -48,23 +48,26 @@
 }
 
 html[data-theme="light"] {
-  --bg: #f6f3ee;
-  --bg-2: #fffaf4;
-  --surface: rgba(255, 252, 248, 0.78);
-  --card: rgba(255, 252, 248, 0.9);
-  --field: rgba(255, 252, 248, 0.96);
-  --ink: #0b1020;
-  --muted: #3e4c66;
-  --line: rgba(11, 16, 32, 0.12);
-  --accent-text: #3f4cc4;
-  --stage: #e7e2d8;
+  --bg: #eaf3ff;
+  --bg-2: #dcebff;
+  --surface: rgba(255, 255, 255, 0.72);
+  --card: rgba(255, 255, 255, 0.88);
+  --field: rgba(255, 255, 255, 0.92);
+  --ink: #13213c;
+  --muted: #3d5274;
+  --line: rgba(19, 33, 60, 0.12);
+  --accent: #8ec5ff;
+  --accent-2: #a7b8ff;
+  --accent-ink: #13213c;
+  --accent-text: #1d4f86;
+  --stage: #d5e6fb;
   --danger: #8e2f45;
-  --shadow: 0 16px 40px rgba(24, 32, 58, 0.08);
-  --glow: 0 10px 24px rgba(109, 124, 255, 0.2);
+  --shadow: 0 16px 40px rgba(19, 33, 60, 0.08);
+  --glow: 0 10px 24px rgba(142, 197, 255, 0.45);
   --wash:
-    radial-gradient(800px 420px at 0% -10%, rgba(109, 124, 255, 0.12), transparent 55%),
-    radial-gradient(640px 380px at 100% 0%, rgba(167, 139, 250, 0.1), transparent 52%),
-    linear-gradient(180deg, #fffaf4 0%, #f6f3ee 50%);
+    radial-gradient(800px 420px at 0% -10%, rgba(142, 197, 255, 0.55), transparent 55%),
+    radial-gradient(640px 380px at 100% 0%, rgba(167, 184, 255, 0.45), transparent 52%),
+    linear-gradient(180deg, #eaf3ff 0%, #dcebff 55%);
   color-scheme: light;
 }
 
@@ -103,8 +106,24 @@ h2 { font-size: 1.15rem; font-weight: 600; letter-spacing: -0.02em; }
   border: 1px solid var(--line); background: var(--card); color: var(--ink);
   border-radius: 999px; min-height: 40px; padding: 8px 14px; cursor: pointer;
   backdrop-filter: blur(12px);
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease, filter .16s ease;
 }
-.ghost:hover, .play:hover { border-color: rgba(109, 124, 255, 0.45); }
+.ghost:hover, .play:hover { border-color: rgba(142, 197, 255, 0.7); }
+.ghost:active, .play:active { transform: translateY(1px); }
+.play.round {
+  width: 52px; height: 52px; min-height: 52px; padding: 0;
+  display: grid; place-items: center; position: relative;
+  color: var(--accent-ink);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.55), transparent 42%),
+    linear-gradient(135deg, var(--accent), var(--accent-2));
+  border: 0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75), var(--glow);
+}
+.play.round svg { width: 18px; height: 18px; fill: currentColor; grid-area: 1 / 1; }
+.play.round .icon-pause { display: none; }
+.play.round.is-playing .icon-play { display: none; }
+.play.round.is-playing .icon-pause { display: block; }
 
 .workspace { display: grid; gap: 16px; }
 .preview-col { position: relative; min-width: 0; }
@@ -200,13 +219,17 @@ textarea { min-height: 72px; resize: vertical; }
 
 .primary, .save {
   border: 0; color: var(--accent-ink); border-radius: 999px;
-  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.5), transparent 46%),
+    linear-gradient(135deg, var(--accent), var(--accent-2));
   min-height: 48px; padding: 12px 18px; font-weight: 600; cursor: pointer; text-decoration: none; text-align: center;
-  box-shadow: var(--glow);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), var(--glow);
+  transition: transform .16s ease, filter .16s ease, box-shadow .16s ease;
 }
 .primary.wide, .save { width: 100%; display: block; }
 .primary:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
 .primary:not(:disabled):hover, .save:hover { filter: brightness(1.04); }
+.primary:not(:disabled):active, .save:active { transform: translateY(1px); }
 
 .fold { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 4px 14px 12px; }
 .fold summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 500; }
@@ -214,9 +237,16 @@ textarea { min-height: 72px; resize: vertical; }
 
 .styles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .style {
+  position: relative;
   border: 1px solid var(--line); background: var(--field); border-radius: 16px; overflow: hidden;
   padding: 0; text-align: left; cursor: pointer; color: inherit;
+  transition: box-shadow .16s ease, transform .16s ease;
 }
+.style-live { position: absolute; left: 0; right: 0; top: 0; width: 100%; height: auto; background: #10203a; }
+.style.previewing { box-shadow: 0 0 0 2px var(--accent); }
+.style-actions { display: flex; gap: 8px; }
+.style-actions[hidden] { display: none; }
+.style-actions .primary, .style-actions .ghost { flex: 1; }
 .style img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; background: #243049; }
 .style .meta { padding: 8px 10px 10px; }
 .style .meta b { display: block; font-size: .86rem; font-weight: 600; }
