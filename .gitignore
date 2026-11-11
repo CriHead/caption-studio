@@ -6,3 +6,5 @@ tests/out/
 models/faster-whisper/
 *.mp4
 .pytest_cache/
+client/node_modules/
+client/public/

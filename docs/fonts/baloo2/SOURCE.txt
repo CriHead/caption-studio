@@ -1,0 +1,1 @@
+Baloo2-Bold.ttf was instantiated at wght=700 from the official Google Fonts file ofl/baloo2/Baloo2[wght].ttf (https://github.com/google/fonts) using fonttools. Licensed under the SIL Open Font License 1.1; see OFL.txt.

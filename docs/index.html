@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f1ea">
+  <meta name="description" content="Add captions to a photo or short video in your browser. Nothing is uploaded.">
+  <title>Caption Studio</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect rx='8' width='32' height='32' fill='%232b241f'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-size='16' fill='%23f6f1ea' font-family='Georgia'%3EA%3C/text%3E%3C/svg%3E">
+  <script type="module" crossorigin src="./assets/index-Bpna6dvG.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-BC5vMDro.css">
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Caption Studio</h1>
+      <p>Upload a photo or video, pick a look, and save.</p>
+    </header>
+
+    <p class="notice">Your photo or video never leaves this device. Speech is transcribed here in the browser, captions are drawn here, and the MP4 is saved here. Nothing is uploaded.</p>
+
+    <form id="form" autocomplete="off">
+      <label class="upload" id="drop">
+        <input type="file" id="file" name="file" accept="video/*,image/png,image/jpeg,image/webp,image/jpg">
+        <strong>Upload a video or image</strong>
+        <span>Tap or drop a file here. Videos up to 60 seconds, files up to 50 MB. Saved videos are 720p.</span>
+        <div class="file-name" id="fileName"></div>
+      </label>
+
+      <h2>Caption text</h2>
+      <textarea id="text" name="text" placeholder="Needed for a photo. Optional for a video — we'll caption the speech if you leave this blank."></textarea>
+      <p class="hint" id="heard"></p>
+      <label class="optional">Optional voice track (for a photo, or to replace the video's audio)
+        <input type="file" id="audio" name="audio" accept="audio/*">
+      </label>
+
+      <section class="preview" id="previewSection" hidden>
+        <h2>Preview</h2>
+        <p class="hint">Play it before you save. The preview is drawn on this device, the same way the file will look.</p>
+        <div class="stage">
+          <canvas id="stage" width="1280" height="720"></canvas>
+        </div>
+        <div class="preview-controls">
+          <button type="button" class="pill" id="play">Play</button>
+          <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Preview time">
+          <span id="timeLabel">0:00</span>
+        </div>
+      </section>
+
+      <h2>Style</h2>
+      <div class="styles" id="styles"></div>
+
+      <h2>Color</h2>
+      <div class="swatches" id="swatches"></div>
+      <p class="hint" id="colorLabel">Pearl</p>
+      <p class="optional">Or a custom hex
+        <input type="text" id="hex" placeholder="#C9A36A" style="min-height:44px;margin-top:6px">
+      </p>
+
+      <h2>Animation</h2>
+      <p class="hint">Leave on Auto to use the style’s own motion. Everything stays smooth by default.</p>
+      <div id="animations"></div>
+
+      <h2>Placement</h2>
+      <p class="hint">Where the captions sit. Auto moves each line through a safe margin.</p>
+      <div class="pills" id="placements"></div>
+
+      <h2>Language</h2>
+      <select id="lang" name="lang"></select>
+      <p class="hint">Used when we caption speech. The first run downloads a small Whisper model from Hugging Face and keeps it in this browser.</p>
+      <label class="optional">Speech model
+        <select id="model">
+          <option value="tiny" selected>Tiny — faster, lighter on a phone</option>
+          <option value="base">Base — a little clearer, larger download</option>
+        </select>
+      </label>
+
+      <h2>Call to action</h2>
+      <input type="text" id="cta" name="cta" placeholder="Shop now (optional)" style="min-height:44px">
+      <p class="hint">Adds a button and a click ripple near the end, or on a matching word.</p>
+      <label class="check"><input type="checkbox" id="emoji" name="emoji"> Add emoji bursts on keywords like shop, love, or fire</label>
+
+      <h2>Frame</h2>
+      <div class="toggle" role="group" aria-label="Frame">
+        <button type="button" id="land" class="on">Landscape</button>
+        <button type="button" id="vert">Vertical</button>
+      </div>
+
+      <button type="submit" class="go" id="go">Make video</button>
+      <div class="status" id="status" role="status" aria-live="polite"></div>
+      <div class="bar" id="bar"><i></i></div>
+    </form>
+
+    <div class="result" id="result">
+      <video id="player" controls playsinline></video>
+      <a class="save" id="save" download="captioned.mp4">Save video</a>
+    </div>
+  </div>
+</body>
+</html>
