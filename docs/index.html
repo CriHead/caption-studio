@@ -19,8 +19,8 @@
   <meta name="description" content="Add captions to a photo or video in your browser. Nothing is uploaded.">
   <title>Caption Studio</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect rx='8' width='32' height='32' fill='%230B1020'/%3E%3Crect x='8' y='11' width='16' height='10' rx='2' fill='none' stroke='%23A78BFA' stroke-width='1.6'/%3E%3C/svg%3E">
-  <script type="module" crossorigin src="./assets/index-OzpAcPQy.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-D1QejNxo.css">
+  <script type="module" crossorigin src="./assets/index-C662HBDO.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-CaWG4x5T.css">
 </head>
 <body>
   <div class="app">
@@ -104,13 +104,13 @@
             <label class="field">Language
               <select id="lang" name="lang"></select>
             </label>
-            <label class="field">Model
-              <select id="model">
-                <option value="tiny" selected>Tiny — faster on a phone</option>
-                <option value="base">Base — a little clearer</option>
+            <label class="field">Accuracy
+              <select id="accuracy">
+                <option value="best" selected>Best — clearer words</option>
+                <option value="fast">Fast — lighter on a phone</option>
               </select>
             </label>
-            <p class="hint">Used when the clip is first transcribed. Changing this later does not start over.</p>
+            <p class="hint">Best uses a stronger speech model that stays on this device after the first download. Fast is lighter. English uses an English-only model.</p>
           </details>
 
           <button type="button" class="primary wide" id="toCaptions" data-next="captions" disabled>Continue</button>
@@ -193,6 +193,7 @@
           <button type="button" class="primary wide" id="go">Save video</button>
           <div class="result" id="result">
             <video id="player" controls playsinline></video>
+            <button type="button" class="primary wide" id="share" hidden>Save to Camera Roll</button>
             <a class="save" id="save" download="captioned.mp4">Download MP4</a>
           </div>
         </div>

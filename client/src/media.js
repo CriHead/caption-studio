@@ -95,7 +95,7 @@ export function resumeAudioContext() {
  * The whole file is never copied into one ArrayBuffer, and each window
  * is released before the next one starts.
  */
-export async function eachPcmWindow(file, seconds, onWindow) {
+export async function eachPcmWindow(file, seconds, onWindow, overlapSeconds = 0) {
   const { Input, ALL_FORMATS, BlobSource, AudioBufferSink } = await import("mediabunny");
   const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(file) });
   try {
@@ -104,22 +104,26 @@ export async function eachPcmWindow(file, seconds, onWindow) {
     const sink = new AudioBufferSink(track);
     let batch = [];
     let covered = 0;
-    const flush = async () => {
+    const flush = async (final) => {
       if (!batch.length) return;
       const window = mixWindow(batch);
+      const windowEnd = window.start + window.pcm.length / 16000;
+      const keepAfter = windowEnd - overlapSeconds;
+      const kept = [];
       for (const piece of batch) {
-        try { piece.close?.(); } catch { /* already released */ }
+        const end = (piece.timestamp || 0) + (piece.duration || piece.buffer?.duration || 0);
+        if (!final && overlapSeconds > 0 && end > keepAfter + 0.02) kept.push(piece);
       }
-      batch = [];
-      covered = 0;
-      if (window) await onWindow(window);
+      batch = kept;
+      covered = kept.reduce((sum, piece) => sum + (piece.duration || piece.buffer?.duration || 0), 0);
+      await onWindow(window);
     };
     for await (const piece of sink.buffers()) {
       batch.push(piece);
       covered += piece.duration || piece.buffer?.duration || 0;
-      if (covered >= seconds) await flush();
+      if (covered >= seconds) await flush(false);
     }
-    await flush();
+    await flush(true);
     return true;
   } finally {
     input.dispose();
@@ -150,7 +154,36 @@ function mixWindow(pieces) {
       pcm[index] += sample / channels;
     }
   }
-  return { pcm, start };
+  return { pcm: shapeForSpeech(pcm), start };
+}
+
+/** Light high-pass and a gentle loudness match so quiet speech is easier to read. */
+export function shapeForSpeech(pcm, sampleRate = 16000) {
+  if (!pcm?.length) return pcm;
+  const rc = 1 / (2 * Math.PI * 80);
+  const a = rc / (rc + 1 / sampleRate);
+  let prevX = 0;
+  let prevY = 0;
+  let energy = 0;
+  let peak = 0;
+  for (let i = 0; i < pcm.length; i += 1) {
+    const x = pcm[i];
+    const y = a * (prevY + x - prevX);
+    prevX = x;
+    prevY = y;
+    pcm[i] = y;
+    energy += y * y;
+    const abs = Math.abs(y);
+    if (abs > peak) peak = abs;
+  }
+  const rms = Math.sqrt(energy / pcm.length);
+  if (rms > 1e-5 && peak > 1e-5) {
+    const gain = Math.min(0.08 / rms, 0.95 / peak);
+    if (gain > 1.08 || gain < 0.85) {
+      for (let i = 0; i < pcm.length; i += 1) pcm[i] *= gain;
+    }
+  }
+  return pcm;
 }
 
 export async function decodeAudio(file) {

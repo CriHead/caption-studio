@@ -8,7 +8,7 @@ import { resetPlacement } from "./place.js";
 import { renderMp4 } from "./render.js";
 import { detectKeepOut, unloadVision } from "./vision.js";
 import { clearSession, loadSession, saveCaptions, saveMedia, saveSettings, saveVoice } from "./session.js";
-import { releaseTranscriber, transcribeAudio } from "./transcribe.js";
+import { modelChoice, releaseTranscriber, takeWords, transcribeAudio } from "./transcribe.js";
 
 const MAX_BYTES = 300 * 1024 * 1024;
 const MAX_SECONDS = 5 * 60;
@@ -44,7 +44,7 @@ const timeLabel = document.getElementById("timeLabel");
 const hexEl = document.getElementById("hex");
 const colorLabel = document.getElementById("colorLabel");
 const langEl = document.getElementById("lang");
-const modelEl = document.getElementById("model");
+const accuracyEl = document.getElementById("accuracy");
 const ctaEl = document.getElementById("cta");
 const emojiEl = document.getElementById("emoji");
 
@@ -117,11 +117,14 @@ buildChoices();
 wire();
 boot();
 
-function lightDevice() {
+function isIos() {
   const ua = navigator.userAgent || "";
-  const ios = /iP(hone|ad|od)/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  return /iP(hone|ad|od)/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+function lightDevice() {
   const low = typeof navigator.deviceMemory === "number" && navigator.deviceMemory <= 4;
-  return ios || low;
+  return isIos() || low;
 }
 
 function markBusy(reason) {
@@ -159,7 +162,7 @@ function boot() {
   };
   window.addEventListener("pagehide", clearBusyOnLeave);
   document.addEventListener("visibilitychange", releaseIfHidden);
-  if (lightDevice()) modelEl.value = "tiny";
+  if ([...langEl.options].some((option) => option.value === "en")) langEl.value = "en";
   let marker = "";
   try { marker = localStorage.getItem(BUSY_KEY) || ""; } catch { /* private mode */ }
   if (HEAVY_WORK.has(marker)) {
@@ -186,7 +189,7 @@ async function resumeSaved(lighter) {
   studio.blocked = false;
   if (lighter) {
     state.quality = "720";
-    modelEl.value = "tiny";
+    accuracyEl.value = "fast";
     document.querySelectorAll("[data-quality]").forEach((node) => {
       node.classList.toggle("on", node.dataset.quality === "720");
     });
@@ -381,7 +384,7 @@ function wire() {
     rememberSettings();
     restartPreview();
   });
-  modelEl.addEventListener("change", () => {
+  accuracyEl.addEventListener("change", () => {
     rememberSettings();
   });
   ctaEl.addEventListener("input", () => {
@@ -451,6 +454,8 @@ function wire() {
     paintThemeButton();
   });
   go.addEventListener("click", () => makeVideo());
+  document.getElementById("share").addEventListener("click", () => shareResult());
+  if (isIos()) go.textContent = "Save to Camera Roll";
   document.body.addEventListener("click", (event) => {
     const step = event.target.closest("[data-step]");
     if (step?.dataset.step) goTo(step.dataset.step);
@@ -593,7 +598,7 @@ function currentSettings() {
     motion: state.motion,
     letterbox: state.letterbox,
     lang: langEl.value,
-    model: modelEl.value,
+    accuracy: accuracyEl.value === "fast" ? "fast" : "best",
     cta: ctaEl.value,
     emoji: emojiEl.checked,
     scrubTime: state.scrubTime,
@@ -740,7 +745,8 @@ function applySettings(settings) {
   ctaEl.value = settings.cta || "";
   emojiEl.checked = Boolean(settings.emoji);
   if (settings.lang) langEl.value = settings.lang;
-  if (settings.model) modelEl.value = settings.model;
+  if (settings.accuracy === "fast" || settings.accuracy === "best") accuracyEl.value = settings.accuracy;
+  else if (settings.model === "tiny") accuracyEl.value = "fast";
   const motion = document.getElementById("motion");
   if (motion) motion.value = state.motion;
   const letter = document.getElementById("letterbox");
@@ -1027,7 +1033,7 @@ async function onAudio(file) {
 
 let speechJob = 0;
 
-function scheduleSpeech(force) {
+async function scheduleSpeech(force) {
   const job = ++speechJob;
   const typed = textEl.value.trim();
   const source = state.voiceFile || (state.kind === "video" ? state.file : null);
@@ -1051,8 +1057,22 @@ function scheduleSpeech(force) {
   const started = performance.now();
   studio.transcribeStarts += 1;
   markBusy("transcribe");
-  const prefer = lightDevice() ? "wasm" : undefined;
-  const model = lightDevice() ? "tiny" : modelEl.value;
+  const light = lightDevice();
+  const prefer = light ? "wasm" : undefined;
+  let webgpu = false;
+  if (!light) {
+    const { gpuAvailable } = await import("./transcribe-core.js");
+    webgpu = await gpuAvailable();
+  }
+  const accuracy = accuracyEl.value === "fast" ? "fast" : "best";
+  const model = modelChoice({
+    language: langEl.value,
+    accuracy,
+    webgpu,
+    light,
+  });
+  const beams = accuracy === "best" && !light ? 2 : 1;
+  studio.model = model;
   const merged = [];
   const texts = [];
   let device = "";
@@ -1065,6 +1085,7 @@ function scheduleSpeech(force) {
       model,
       language: langEl.value === "auto" ? null : langEl.value,
       prefer,
+      beams,
       keepWorker: true,
       onProgress: (progress) => {
         if (job !== speechJob) return;
@@ -1075,13 +1096,8 @@ function scheduleSpeech(force) {
     device = result.device || device;
     modelName = result.model || modelName;
     if (result.text) texts.push(result.text.trim());
-    for (const chunk of result.chunks || []) {
-      const stamp = chunk.timestamp || [];
-      const wordStart = (Number(stamp[0]) || 0) + start;
-      const wordEnd = Math.max(wordStart + 0.05, (Number(stamp[1]) || Number(stamp[0]) || 0) + start);
-      merged.push({ text: chunk.text, timestamp: [wordStart, wordEnd] });
-    }
-  }).then((found) => {
+    takeWords(merged, result.chunks, start);
+  }, 5).then((found) => {
     releaseTranscriber();
     clearBusy("transcribe");
     if (job !== speechJob) return;
@@ -1558,6 +1574,21 @@ function hideResult() {
   player.load();
 }
 
+async function shareResult() {
+  const file = studio.lastFile;
+  if (!file || typeof navigator.share !== "function") {
+    setStatus("This browser will download the file instead.", true);
+    return;
+  }
+  try {
+    await navigator.share({ files: [file], title: "Captioned video" });
+    setStatus("Choose Save Video to put it in your camera roll.");
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    setStatus("Could not open the share sheet. Use Download MP4.", true);
+  }
+}
+
 async function makeVideo() {
   if (!state.file) {
     setStatus("Please upload a video or an image first.", true);
@@ -1634,12 +1665,30 @@ async function makeVideo() {
     state.resultUrl = URL.createObjectURL(blob);
     player.src = state.resultUrl;
     save.href = state.resultUrl;
+    const file = new File([blob], "captioned.mp4", { type: "video/mp4" });
+    studio.lastFile = file;
     result.style.display = "block";
     const heardAudio = Boolean(audioFile);
     const audioNote = heardAudio && !rendered.audioCodec
       ? " This browser could not add the sound, so the file is silent."
       : "";
-    setStatus(`Ready to save. The file never left this device.${audioNote}`);
+    const shareBtn = document.getElementById("share");
+    const canShare = typeof navigator.canShare === "function" && navigator.canShare({ files: [file] });
+    shareBtn.hidden = !canShare;
+    let shared = false;
+    if (canShare) {
+      try {
+        await navigator.share({ files: [file], title: "Captioned video" });
+        shared = true;
+      } catch (error) {
+        if (error?.name !== "AbortError") shared = false;
+      }
+    }
+    setStatus(shared
+      ? `Choose Save Video to put it in your camera roll.${audioNote}`
+      : (canShare
+        ? `Tap Save to Camera Roll, then choose Save Video.${audioNote}`
+        : `Ready to download. The file never left this device.${audioNote}`));
     setProgress(1);
     result.scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
