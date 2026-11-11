@@ -37,13 +37,35 @@ export function probeVideo(file) {
 
 export async function loadImage(file) {
   try {
-    return await createImageBitmap(file);
+    const bitmap = await createImageBitmap(file);
+    const longest = Math.max(bitmap.width, bitmap.height);
+    if (longest <= 1920) return bitmap;
+    const scale = 1920 / longest;
+    const small = await createImageBitmap(bitmap, {
+      resizeWidth: Math.max(1, Math.round(bitmap.width * scale)),
+      resizeHeight: Math.max(1, Math.round(bitmap.height * scale)),
+      resizeQuality: "high",
+    });
+    bitmap.close();
+    return small;
   } catch {
     const url = URL.createObjectURL(file);
     try {
       return await new Promise((resolve, reject) => {
         const image = new Image();
-        image.onload = () => resolve(image);
+        image.onload = () => {
+          const longest = Math.max(image.naturalWidth, image.naturalHeight);
+          if (longest <= 1920) {
+            resolve(image);
+            return;
+          }
+          const scale = 1920 / longest;
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+          canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+          canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+          resolve(canvas);
+        };
         image.onerror = () => reject(new Error("Could not read that image."));
         image.src = url;
       });
@@ -61,6 +83,60 @@ function contextFor(sampleRate) {
     audioCtx = new AudioContext({ sampleRate: sampleRate || 48000 });
   }
   return audioCtx;
+}
+
+/**
+ * Walk the audio track in short windows and hand back 16 kHz mono.
+ * The whole file is never copied into one ArrayBuffer, and each window
+ * is released before the next one starts.
+ */
+export async function eachPcmWindow(file, seconds, onWindow) {
+  const { Input, ALL_FORMATS, BlobSource, AudioBufferSink } = await import("mediabunny");
+  const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(file) });
+  try {
+    const track = await input.getPrimaryAudioTrack();
+    if (!track) return false;
+    const sink = new AudioBufferSink(track);
+    let batch = [];
+    let covered = 0;
+    const flush = async () => {
+      if (!batch.length) return;
+      const window = windowTo16k(batch);
+      batch = [];
+      covered = 0;
+      if (window) await onWindow(window);
+    };
+    for await (const piece of sink.buffers()) {
+      batch.push(piece);
+      covered += piece.duration || piece.buffer.duration || 0;
+      if (covered >= seconds) await flush();
+    }
+    await flush();
+    return true;
+  } finally {
+    input.dispose();
+  }
+}
+
+function windowTo16k(pieces) {
+  const sampleRate = pieces[0].buffer.sampleRate;
+  const channels = Math.min(2, pieces[0].buffer.numberOfChannels || 1);
+  const start = pieces[0].timestamp || 0;
+  const last = pieces[pieces.length - 1];
+  const end = (last.timestamp || 0) + (last.duration || last.buffer.duration || 0);
+  const length = Math.max(1, Math.ceil((end - start) * sampleRate));
+  const ctx = contextFor(sampleRate);
+  const buffer = ctx.createBuffer(channels, length, sampleRate);
+  for (const piece of pieces) {
+    const offset = Math.max(0, Math.round(((piece.timestamp || 0) - start) * sampleRate));
+    for (let channel = 0; channel < channels; channel++) {
+      const src = piece.buffer.getChannelData(Math.min(channel, piece.buffer.numberOfChannels - 1));
+      const dst = buffer.getChannelData(channel);
+      const count = Math.min(src.length, Math.max(0, dst.length - offset));
+      if (count > 0) dst.set(src.subarray(0, count), offset);
+    }
+  }
+  return { pcm: toMono16k(buffer), start };
 }
 
 export async function decodeAudio(file) {

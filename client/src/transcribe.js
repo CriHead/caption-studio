@@ -26,6 +26,10 @@ function releaseWorker() {
   worker = null;
 }
 
+export function releaseTranscriber() {
+  releaseWorker();
+}
+
 /**
  * Transcribe in 30-second pieces so a long clip does not run as one giant pass.
  * The speech model stays loaded for the whole clip, then the worker is closed.
@@ -64,7 +68,7 @@ export async function transcribeAudio(pcm, options) {
       }
     }
   } finally {
-    releaseWorker();
+    if (!options.keepWorker) releaseWorker();
   }
 
   return {
@@ -106,9 +110,16 @@ function transcribeSlice(pcm, options) {
       if (message.type === "error") finish(reject, new Error(message.message || "Transcription failed."));
     };
     current.addEventListener("message", onMessage);
-    devicePreference().then((prefer) => {
+    const chosen = options.prefer
+      ? Promise.resolve(options.prefer)
+      : devicePreference();
+    chosen.then((prefer) => {
       if (settled) return;
-      const copy = new Float32Array(pcm);
+      const ownsBuffer = pcm instanceof Float32Array
+        && pcm.byteOffset === 0
+        && pcm.byteLength === pcm.buffer.byteLength;
+      const copy = ownsBuffer ? pcm : new Float32Array(pcm);
+      const transfer = copy.buffer;
       current.postMessage({
         type: "transcribe",
         id,
@@ -116,7 +127,7 @@ function transcribeSlice(pcm, options) {
         model: options.model,
         language: options.language,
         prefer,
-      }, [copy.buffer]);
+      }, [transfer]);
     });
   });
 }

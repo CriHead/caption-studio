@@ -39,8 +39,16 @@
 
     <div class="workspace">
       <section class="preview-col">
+        <div class="recovery" id="recovery" hidden>
+          <h2>Last session stopped unexpectedly</h2>
+          <p class="hint">The page was closed while a video was open. Nothing was uploaded. You can show the same clip again, use lighter settings, or start fresh.</p>
+          <button type="button" class="primary" id="resume">Resume</button>
+          <button type="button" class="ghost" id="lighter">Try lighter settings</button>
+          <button type="button" class="ghost" id="forget">Start over</button>
+        </div>
         <div class="stage" id="stageFrame">
-          <canvas id="stage" width="1280" height="720"></canvas>
+          <video id="previewVideo" playsinline muted preload="metadata"></video>
+          <canvas id="stage" width="2" height="2"></canvas>
           <p class="stage-empty" id="stageEmpty">Upload a clip to see it here.</p>
         </div>
         <div class="transport">
@@ -107,6 +115,7 @@
             <textarea id="text" name="text" placeholder="Leave this blank to use the transcript. For a photo, type the caption here."></textarea>
           </label>
           <div id="lines" class="lines"></div>
+          <button type="button" class="ghost" id="readSpeech" hidden>Read the speech</button>
           <label class="field quiet">Optional voice track
             <input type="file" id="audio" name="audio" accept="audio/*">
           </label>
