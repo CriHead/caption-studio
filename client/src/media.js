@@ -73,7 +73,9 @@ export async function decodeAudio(file) {
     const pieces = [];
     for await (const piece of sink.buffers()) pieces.push(piece);
     if (!pieces.length) return null;
-    return stitch(pieces);
+    const mixed = stitch(pieces);
+    pieces.length = 0;
+    return mixed;
   } finally {
     input.dispose();
   }
@@ -117,21 +119,23 @@ export function toMono16k(buffer) {
   const sampleRate = buffer.sampleRate;
   const channels = buffer.numberOfChannels;
   const length = buffer.length;
-  const mono = new Float32Array(length);
-  for (let channel = 0; channel < channels; channel++) {
-    const data = buffer.getChannelData(channel);
-    for (let i = 0; i < length; i++) mono[i] += data[i] / channels;
-  }
-  if (sampleRate === 16000) return mono;
-  const outLength = Math.max(1, Math.round((length * 16000) / sampleRate));
+  const outLength = sampleRate === 16000 ? length : Math.max(1, Math.round((length * 16000) / sampleRate));
   const out = new Float32Array(outLength);
   const ratio = sampleRate / 16000;
+  const data = [];
+  for (let channel = 0; channel < channels; channel++) data.push(buffer.getChannelData(channel));
   for (let i = 0; i < outLength; i++) {
-    const x = i * ratio;
-    const i0 = Math.floor(x);
+    const x = sampleRate === 16000 ? i : i * ratio;
+    const i0 = Math.min(length - 1, Math.floor(x));
     const i1 = Math.min(length - 1, i0 + 1);
     const frac = x - i0;
-    out[i] = mono[i0] * (1 - frac) + mono[i1] * frac;
+    let left = 0;
+    let right = 0;
+    for (let channel = 0; channel < channels; channel++) {
+      left += data[channel][i0];
+      right += data[channel][i1];
+    }
+    out[i] = (left * (1 - frac) + right * frac) / channels;
   }
   return out;
 }

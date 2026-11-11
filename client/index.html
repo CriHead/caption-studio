@@ -3,98 +3,160 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f6f1ea">
-  <meta name="description" content="Add captions to a photo or short video in your browser. Nothing is uploaded.">
+  <meta name="theme-color" content="#0c0c0e">
+  <meta name="description" content="Add captions to a photo or video in your browser. Nothing is uploaded.">
   <title>Caption Studio</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect rx='8' width='32' height='32' fill='%232b241f'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-size='16' fill='%23f6f1ea' font-family='Georgia'%3EA%3C/text%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect rx='8' width='32' height='32' fill='%2316161a'/%3E%3Crect x='8' y='11' width='16' height='10' rx='2' fill='none' stroke='%23e4b15a' stroke-width='1.6'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="./src/styles.css">
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <h1>Caption Studio</h1>
-      <p>Upload a photo or video, pick a look, and save.</p>
+  <div class="app">
+    <header class="top">
+      <div class="brand">
+        <span class="mark" aria-hidden="true"></span>
+        <div>
+          <h1>Caption Studio</h1>
+          <p>Everything stays on this device.</p>
+        </div>
+      </div>
+      <button type="button" class="ghost" id="reset" hidden>Start over</button>
     </header>
 
-    <p class="notice">Your photo or video never leaves this device. Speech is transcribed here in the browser, captions are drawn here, and the MP4 is saved here. Nothing is uploaded.</p>
-
-    <form id="form" autocomplete="off">
-      <label class="upload" id="drop">
-        <input type="file" id="file" name="file" accept="video/*,image/png,image/jpeg,image/webp,image/jpg">
-        <strong>Upload a video or image</strong>
-        <span>Tap or drop a file here. Videos up to 60 seconds, files up to 50 MB. Saved videos are 720p.</span>
-        <div class="file-name" id="fileName"></div>
-      </label>
-
-      <h2>Caption text</h2>
-      <textarea id="text" name="text" placeholder="Needed for a photo. Optional for a video — we'll caption the speech if you leave this blank."></textarea>
-      <p class="hint" id="heard"></p>
-      <label class="optional">Optional voice track (for a photo, or to replace the video's audio)
-        <input type="file" id="audio" name="audio" accept="audio/*">
-      </label>
-
-      <section class="preview" id="previewSection" hidden>
-        <h2>Preview</h2>
-        <p class="hint">Play it before you save. The preview is drawn on this device, the same way the file will look.</p>
-        <div class="stage">
+    <div class="workspace">
+      <section class="preview-col">
+        <div class="stage" id="stageFrame">
           <canvas id="stage" width="1280" height="720"></canvas>
+          <p class="stage-empty" id="stageEmpty">Upload a clip to see it here.</p>
         </div>
-        <div class="preview-controls">
-          <button type="button" class="pill" id="play">Play</button>
+        <div class="transport">
+          <button type="button" class="play" id="play" aria-label="Play preview">Play</button>
           <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Preview time">
           <span id="timeLabel">0:00</span>
         </div>
       </section>
 
-      <h2>Style</h2>
-      <div class="styles" id="styles"></div>
+      <section class="sheet">
+        <nav class="steps" aria-label="Steps">
+          <button type="button" data-step="upload" class="on"><b>1</b> Upload</button>
+          <button type="button" data-step="captions"><b>2</b> Captions</button>
+          <button type="button" data-step="style"><b>3</b> Style</button>
+          <button type="button" data-step="export"><b>4</b> Export</button>
+        </nav>
 
-      <h2>Color</h2>
-      <div class="swatches" id="swatches"></div>
-      <p class="hint" id="colorLabel">Pearl</p>
-      <p class="optional">Or a custom hex
-        <input type="text" id="hex" placeholder="#C9A36A" style="min-height:44px;margin-top:6px">
-      </p>
+        <div class="panel" data-step-panel="upload">
+          <div class="upload" id="drop">
+            <strong>Add a photo or video</strong>
+            <span>Up to 5 minutes and 300 MB. Drop a file, or choose one.</span>
+            <button type="button" class="primary" id="choose">Choose a file</button>
+            <div class="file-name" id="fileName"></div>
+          </div>
 
-      <h2>Animation</h2>
-      <p class="hint">Leave on Auto to use the style’s own motion. Everything stays smooth by default.</p>
-      <div id="animations"></div>
+          <div class="field">
+            <span class="label">Output</span>
+            <div class="segment" id="quality" role="group" aria-label="Output quality">
+              <button type="button" data-quality="720" class="on">720p · faster</button>
+              <button type="button" data-quality="1080">1080p</button>
+            </div>
+            <p class="hint">720p is the quicker choice. 1080p, and anything past a minute, takes longer on a phone.</p>
+          </div>
 
-      <h2>Placement</h2>
-      <p class="hint">Where the captions sit. Auto moves each line through a safe margin.</p>
-      <div class="pills" id="placements"></div>
+          <div class="field">
+            <span class="label">Frame</span>
+            <div class="segment" role="group" aria-label="Frame">
+              <button type="button" id="land" class="on">Landscape</button>
+              <button type="button" id="vert">Vertical</button>
+            </div>
+          </div>
 
-      <h2>Language</h2>
-      <select id="lang" name="lang"></select>
-      <p class="hint">Used when we caption speech. The first run downloads a small Whisper model from Hugging Face and keeps it in this browser.</p>
-      <label class="optional">Speech model
-        <select id="model">
-          <option value="tiny" selected>Tiny — faster, lighter on a phone</option>
-          <option value="base">Base — a little clearer, larger download</option>
-        </select>
-      </label>
+          <details class="fold">
+            <summary>Speech options</summary>
+            <label class="field">Language
+              <select id="lang" name="lang"></select>
+            </label>
+            <label class="field">Model
+              <select id="model">
+                <option value="tiny" selected>Tiny — faster on a phone</option>
+                <option value="base">Base — a little clearer</option>
+              </select>
+            </label>
+            <p class="hint">Used when the clip is first transcribed. Changing this later does not start over.</p>
+          </details>
 
-      <h2>Call to action</h2>
-      <input type="text" id="cta" name="cta" placeholder="Shop now (optional)" style="min-height:44px">
-      <p class="hint">Adds a button and a click ripple near the end, or on a matching word.</p>
-      <label class="check"><input type="checkbox" id="emoji" name="emoji"> Add emoji bursts on keywords like shop, love, or fire</label>
+          <button type="button" class="primary wide" id="toCaptions" data-next="captions" disabled>Continue</button>
+        </div>
 
-      <h2>Frame</h2>
-      <div class="toggle" role="group" aria-label="Frame">
-        <button type="button" id="land" class="on">Landscape</button>
-        <button type="button" id="vert">Vertical</button>
-      </div>
+        <div class="panel" data-step-panel="captions" hidden>
+          <h2>Captions</h2>
+          <p class="hint" id="heard">Edit a line, or type your own words.</p>
+          <label class="field">Your words
+            <textarea id="text" name="text" placeholder="Leave this blank to use the transcript. For a photo, type the caption here."></textarea>
+          </label>
+          <div id="lines" class="lines"></div>
+          <label class="field quiet">Optional voice track
+            <input type="file" id="audio" name="audio" accept="audio/*">
+          </label>
+          <button type="button" class="primary wide" data-next="style">Continue</button>
+        </div>
 
-      <button type="submit" class="go" id="go">Make video</button>
-      <div class="status" id="status" role="status" aria-live="polite"></div>
-      <div class="bar" id="bar"><i></i></div>
-    </form>
+        <div class="panel" data-step-panel="style" hidden>
+          <h2>Style</h2>
+          <p class="hint">Tap a look. The preview updates immediately.</p>
+          <div class="styles" id="styles"></div>
 
-    <div class="result" id="result">
-      <video id="player" controls playsinline></video>
-      <a class="save" id="save" download="captioned.mp4">Save video</a>
+          <div class="field">
+            <span class="label">Color</span>
+            <div class="swatches" id="swatches"></div>
+            <p class="hint" id="colorLabel">Pearl</p>
+          </div>
+
+          <details class="fold">
+            <summary>Animation and motion</summary>
+            <div id="animations"></div>
+            <label class="field">Extra motion
+              <select id="motion">
+                <option value="">Style default</option>
+                <option value="float">Float</option>
+                <option value="wiggle">Wiggle</option>
+                <option value="swing">Swing</option>
+                <option value="bounce-loop">Bounce</option>
+                <option value="shake-word">Shake</option>
+                <option value="none">Still</option>
+              </select>
+            </label>
+          </details>
+
+          <details class="fold">
+            <summary>Placement, color, and extras</summary>
+            <p class="label">Placement</p>
+            <div class="pills" id="placements"></div>
+            <label class="field">Custom color
+              <input type="text" id="hex" placeholder="#E4B15A" enterkeyhint="done">
+            </label>
+            <label class="check"><input type="checkbox" id="letterbox"> Cinematic letterbox bars</label>
+            <label class="check"><input type="checkbox" id="emoji" name="emoji"> Emoji bursts on words like love, shop, or fire</label>
+            <label class="field">Link button
+              <input type="text" id="cta" name="cta" placeholder="Shop now" enterkeyhint="done">
+            </label>
+          </details>
+
+          <button type="button" class="primary wide" data-next="export">Continue</button>
+        </div>
+
+        <div class="panel" data-step-panel="export" hidden>
+          <h2>Export</h2>
+          <p class="summary" id="exportSummary">Add a clip to export.</p>
+          <button type="button" class="primary wide" id="go">Save video</button>
+          <div class="status" id="status" role="status" aria-live="polite"></div>
+          <div class="bar" id="bar"><i></i></div>
+          <div class="result" id="result">
+            <video id="player" controls playsinline></video>
+            <a class="save" id="save" download="captioned.mp4">Download MP4</a>
+          </div>
+        </div>
+      </section>
     </div>
   </div>
+  <input type="file" id="file" accept="video/*,image/png,image/jpeg,image/webp,image/jpg" hidden>
   <script type="module" src="./src/main.js"></script>
 </body>
 </html>

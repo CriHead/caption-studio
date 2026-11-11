@@ -24,8 +24,8 @@ paid caption app.
 `client/` is the same studio running entirely in the browser. The built
 site is in `docs/`, ready for GitHub Pages. Videos, photos, and audio stay
 on the device: Whisper (tiny or base, multilingual) transcribes speech with
-word timestamps, and captions are burned into a 720p H.264 MP4 with
-WebCodecs. No API key and no paid host.
+word timestamps, and captions are burned into an H.264 MP4 (720p or 1080p)
+with WebCodecs. Clips can run up to about 5 minutes. No API key and no paid host.
 
 GitHub Pages cannot send the headers multithreaded WASM needs, so inference
 uses one WASM thread, or WebGPU when the browser has it. The speech model
