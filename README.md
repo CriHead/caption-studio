@@ -19,6 +19,36 @@ This Space wraps an original local caption engine (ASS subtitles burned in
 with ffmpeg/libass, plus Ken Burns-style motion). It is not a copy of a
 paid caption app.
 
+## Browser version (free, no server)
+
+`client/` is the same studio running entirely in the browser. The built
+site is in `docs/`, ready for GitHub Pages. Videos, photos, and audio stay
+on the device: Whisper (tiny or base, multilingual) transcribes speech with
+word timestamps, and captions are burned into a 720p H.264 MP4 with
+WebCodecs. No API key and no paid host.
+
+GitHub Pages cannot send the headers multithreaded WASM needs, so inference
+uses one WASM thread, or WebGPU when the browser has it. The speech model
+downloads once from the public Hugging Face CDN and is cached in the browser.
+
+Enable Pages:
+
+1. Merge this to `main` (the site already lives in `/docs`).
+2. On GitHub, open **Settings → Pages**.
+3. Under **Build and deployment**, set **Source** to **Deploy from a branch**.
+4. Choose branch **main** and folder **/docs**, then save.
+
+The site will be at `https://<user>.github.io/<repo>/`. Paths are relative,
+so a project site and a user site both work. To rebuild after a client
+change: `cd client && npm install && npm run build`, then commit `docs/`.
+
+A 15-second clip on a desktop CPU took about 5 seconds to transcribe with
+Whisper tiny and about 2 seconds to render the 720p file. A phone is slower,
+and the first transcription also downloads the model.
+
+The Flask app in `app.py` is unchanged and can still be run locally or as
+a Docker Space.
+
 ## Limits (free CPU)
 
 - Output is 720p (landscape 1280×720, or vertical 720×1280)

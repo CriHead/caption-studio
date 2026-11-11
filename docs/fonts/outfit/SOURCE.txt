@@ -1,0 +1,1 @@
+Outfit-Medium.ttf was instantiated at wght=500 and Outfit-Bold.ttf at wght=700 from official Google Fonts ofl/outfit/Outfit[wght].ttf using fonttools. SIL OFL 1.1; see OFL.txt.

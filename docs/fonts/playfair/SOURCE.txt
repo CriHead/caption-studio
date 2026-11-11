@@ -1,0 +1,1 @@
+PlayfairDisplay-Bold.ttf and PlayfairDisplay-Regular.ttf were instantiated at wght=700 and wght=400 from official Google Fonts ofl/playfairdisplay/PlayfairDisplay[wght].ttf using fonttools. SIL OFL 1.1; see OFL.txt.

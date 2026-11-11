@@ -1,0 +1,1 @@
+Cinzel-SemiBold.ttf was instantiated at wght=600 from official Google Fonts ofl/cinzel/Cinzel[wght].ttf using fonttools. SIL OFL 1.1; see OFL.txt.

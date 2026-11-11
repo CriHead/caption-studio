@@ -1,0 +1,1 @@
+LibreBaskerville-Bold.ttf was instantiated at wght=700 from official Google Fonts ofl/librebaskerville/LibreBaskerville[wght].ttf using fonttools. SIL OFL 1.1; see OFL.txt.
