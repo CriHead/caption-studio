@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0B1020">
   <script>
     (function () {
@@ -12,7 +12,7 @@
         var theme = saved === "light" || saved === "dark" ? saved : (light ? "light" : "dark");
         document.documentElement.dataset.theme = theme;
         var meta = document.querySelector('meta[name="theme-color"]');
-        if (meta) meta.content = theme === "light" ? "#F6F3EE" : "#0B1020";
+        if (meta) meta.content = theme === "light" ? "#EAF3FF" : "#0B1020";
       } catch (e) {}
     })();
   </script>
@@ -41,21 +41,28 @@
       <section class="preview-col">
         <div class="recovery" id="recovery" hidden>
           <h2>Last session stopped unexpectedly</h2>
-          <p class="hint">The page was closed while a video was open. Nothing was uploaded. You can show the same clip again, use lighter settings, or start fresh.</p>
+          <p class="hint">Transcription or export was interrupted. Your clip is still on this device.</p>
           <button type="button" class="primary" id="resume">Resume</button>
           <button type="button" class="ghost" id="lighter">Try lighter settings</button>
           <button type="button" class="ghost" id="forget">Start over</button>
         </div>
         <div class="stage" id="stageFrame">
-          <video id="previewVideo" playsinline muted preload="metadata"></video>
+          <video id="previewVideo" playsinline preload="metadata"></video>
+          <audio id="previewVoice" preload="metadata"></audio>
           <canvas id="stage" width="2" height="2"></canvas>
           <p class="stage-empty" id="stageEmpty">Upload a clip to see it here.</p>
         </div>
         <div class="transport">
-          <button type="button" class="play" id="play" aria-label="Play preview">Play</button>
+          <button type="button" class="play round" id="play" aria-label="Play preview">
+            <svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>
+            <svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>
+          </button>
+          <button type="button" class="play" id="mute" aria-pressed="false" aria-label="Mute preview">Mute</button>
           <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Preview time">
           <span id="timeLabel">0:00</span>
         </div>
+        <div class="status" id="status" role="status" aria-live="polite"></div>
+        <div class="bar" id="bar"><i></i></div>
       </section>
 
       <section class="sheet">
@@ -110,11 +117,15 @@
 
         <div class="panel" data-step-panel="captions" hidden>
           <h2>Captions</h2>
-          <p class="hint" id="heard">Edit a line, or type your own words.</p>
-          <label class="field">Your words
-            <textarea id="text" name="text" placeholder="Leave this blank to use the transcript. For a photo, type the caption here."></textarea>
-          </label>
-          <div id="lines" class="lines"></div>
+          <p class="hint" id="heard">Captions follow the speech, word by word. Nothing to type unless the clip is silent.</p>
+          <details class="fold" id="editWords">
+            <summary>Edit words</summary>
+            <div id="lines" class="lines"></div>
+            <label class="field">Type a caption
+              <textarea id="text" name="text" placeholder="Only for a clip with no speech, or to replace the transcript."></textarea>
+            </label>
+            <p class="hint" id="noSpeech" hidden>No speech was found. Type the caption here.</p>
+          </details>
           <button type="button" class="ghost" id="readSpeech" hidden>Read the speech</button>
           <label class="field quiet">Optional voice track
             <input type="file" id="audio" name="audio" accept="audio/*">
@@ -124,8 +135,12 @@
 
         <div class="panel" data-step-panel="style" hidden>
           <h2>Style</h2>
-          <p class="hint">Tap a look. The preview updates immediately.</p>
+          <p class="hint">Tap a look to preview it. Apply keeps it on this clip.</p>
           <div class="styles" id="styles"></div>
+          <div class="style-actions" id="styleActions" hidden>
+            <button type="button" class="primary" id="applyStyle">Apply</button>
+            <button type="button" class="ghost" id="cancelStyle">Cancel</button>
+          </div>
 
           <div class="field">
             <span class="label">Color</span>
@@ -151,7 +166,12 @@
 
           <details class="fold">
             <summary>Placement, color, and extras</summary>
-            <p class="label">Placement</p>
+            <p class="label">Where captions sit</p>
+            <div class="segment" id="placeMode" role="group" aria-label="Caption placement">
+              <button type="button" data-place-mode="move" class="on">Move around</button>
+              <button type="button" data-place-mode="bottom">Stay at bottom</button>
+            </div>
+            <p class="hint">Move around keeps words off faces and the subject. Stay at bottom keeps one line.</p>
             <div class="pills" id="placements"></div>
             <label class="field">Custom color
               <input type="text" id="hex" placeholder="#E4B15A" enterkeyhint="done">
@@ -170,8 +190,6 @@
           <h2>Export</h2>
           <p class="summary" id="exportSummary">Add a clip to export.</p>
           <button type="button" class="primary wide" id="go">Save video</button>
-          <div class="status" id="status" role="status" aria-live="polite"></div>
-          <div class="bar" id="bar"><i></i></div>
           <div class="result" id="result">
             <video id="player" controls playsinline></video>
             <a class="save" id="save" download="captioned.mp4">Download MP4</a>

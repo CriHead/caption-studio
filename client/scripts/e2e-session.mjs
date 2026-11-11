@@ -68,6 +68,7 @@ try {
 
   await page.click('[data-step="style"]');
   await page.click('[data-style="bold-pop"]');
+  await page.click("#applyStyle");
   await page.evaluate(() => {
     document.querySelector("#animations").closest("details").open = true;
     document.querySelector("#placements").closest("details").open = true;

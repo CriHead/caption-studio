@@ -143,6 +143,7 @@ async function playAndSample(page, file, label) {
     cssHeight: Math.round(document.getElementById("stageFrame").getBoundingClientRect().height),
     autoplay: document.getElementById("previewVideo").autoplay,
     muted: document.getElementById("previewVideo").muted,
+    volume: document.getElementById("previewVideo").volume,
     playsInline: document.getElementById("previewVideo").playsInline,
     preload: document.getElementById("previewVideo").preload,
     blobVideos: [...document.querySelectorAll("video")].filter((node) => String(node.src).startsWith("blob:")).length,
@@ -171,6 +172,15 @@ async function playAndSample(page, file, label) {
       imageData: window.__imageData || 0,
       blobVideos: [...document.querySelectorAll("video")].filter((node) => String(node.src).startsWith("blob:")).length,
       status: document.getElementById("status").textContent,
+      muted: video.muted,
+      volume: video.volume,
+      audioTracks: (() => {
+        try {
+          if (typeof video.captureStream === "function") return video.captureStream().getAudioTracks().length;
+        } catch { /* the element can still be audible without a capture stream */ }
+        return video.audioTracks ? video.audioTracks.length : 0;
+      })(),
+      decodedAudio: video.webkitAudioDecodedByteCount || 0,
     };
   });
   const heapAfter = await heapBytes(page);
@@ -180,7 +190,11 @@ async function playAndSample(page, file, label) {
     addedMb: Math.round((rssAfter - emptyRss) / 1024),
   });
   if (before.autoplay) throw new Error(`${label}: autoplay is on`);
-  if (!before.muted) throw new Error(`${label}: preview video is not muted`);
+  if (before.muted || during.muted) throw new Error(`${label}: preview stayed muted`);
+  if (!(before.volume > 0) || !(during.volume > 0)) throw new Error(`${label}: preview volume is 0`);
+  if (before.videoWidth >= 640 && during.audioTracks < 1 && during.decodedAudio < 1) {
+    throw new Error(`${label}: no audio track was playing`);
+  }
   if (!before.playsInline) throw new Error(`${label}: playsinline is off`);
   if (before.preload !== "metadata") throw new Error(`${label}: preload is ${before.preload}`);
   if (before.blobVideos !== 1 || during.blobVideos !== 1) {
@@ -237,22 +251,79 @@ try {
     }
   }
 
-  await page.evaluate(() => localStorage.setItem("caption-studio-busy", "play"));
-  await page.reload({ waitUntil: "networkidle0" });
-  await page.waitForFunction(() => window.__studio?.ready === true && window.__studio?.blocked === true);
-  const recovery = await page.evaluate(() => ({
-    hidden: document.getElementById("recovery").hidden,
-    title: document.querySelector("#recovery h2")?.textContent || "",
-    src: document.getElementById("previewVideo").getAttribute("src"),
-    starts: window.__studio.transcribeStarts,
-    currentSrc: document.getElementById("previewVideo").currentSrc,
+  await page.click("#mute");
+  const silenced = await page.evaluate(() => ({
+    muted: document.getElementById("previewVideo").muted,
+    volume: document.getElementById("previewVideo").volume,
   }));
+  if (!silenced.muted || !(silenced.volume > 0)) throw new Error("Mute did not silence the preview");
+  await page.click("#mute");
+
+  await page.evaluate(() => {
+    document.getElementById("previewVideo").pause();
+    document.getElementById("previewVoice").pause();
+    localStorage.setItem("caption-studio-busy", "play");
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => window.__studio?.ready === true);
+  const ignored = await page.evaluate(() => ({
+    hidden: document.getElementById("recovery").hidden,
+    blocked: Boolean(window.__studio.blocked),
+    marker: localStorage.getItem("caption-studio-busy"),
+  }));
+  console.log("Play marker", ignored);
+  if (!ignored.hidden || ignored.blocked) throw new Error("Playing was treated as a crash");
+
+  const keepMarker = () => {
+    localStorage.setItem("caption-studio-busy", "transcribe");
+    return localStorage.getItem("caption-studio-busy");
+  };
+  console.log("marker before reload", await page.evaluate(keepMarker) || await page.evaluate(() => localStorage.getItem("caption-studio-busy")));
+  await page.reload({ waitUntil: "domcontentloaded" });
+  let recoveryState = null;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    recoveryState = await page.evaluate(() => ({
+      ready: window.__studio?.ready === true,
+      blocked: Boolean(window.__studio?.blocked),
+      marker: localStorage.getItem("caption-studio-busy"),
+      hidden: document.getElementById("recovery")?.hidden,
+      src: document.getElementById("previewVideo")?.currentSrc || "",
+      status: document.getElementById("status")?.textContent || "",
+      error: window.__studio?.error || "",
+    })).catch((error) => ({ failed: error.message }));
+    if (recoveryState.ready && recoveryState.blocked && String(recoveryState.src).startsWith("blob:")) break;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  console.log("recovery state", recoveryState);
+  const recovery = await page.evaluate(() => {
+    const card = document.getElementById("recovery");
+    const stage = document.getElementById("stageFrame");
+    return {
+      hidden: card.hidden,
+      title: document.querySelector("#recovery h2")?.textContent || "",
+      hint: document.querySelector("#recovery .hint")?.textContent || "",
+      position: getComputedStyle(card).position,
+      cardTop: card.getBoundingClientRect().top,
+      stageTop: stage.getBoundingClientRect().top,
+      starts: window.__studio.transcribeStarts,
+      currentSrc: document.getElementById("previewVideo").currentSrc,
+      emptyHidden: document.getElementById("stageEmpty").hidden,
+    };
+  });
   console.log("Recovery", recovery);
   if (recovery.hidden) throw new Error("The crash card stayed hidden.");
   if (!/stopped unexpectedly/i.test(recovery.title)) throw new Error(`Unexpected card: ${recovery.title}`);
-  if (recovery.src) throw new Error("Reload attached a video even though the last run was interrupted.");
-  if (recovery.currentSrc) throw new Error("Reload set currentSrc on the preview video.");
+  if (/video was open/i.test(recovery.hint)) throw new Error("The card still blames simply having a video open");
+  if (recovery.position !== "absolute") throw new Error("The recovery card pushes the page instead of overlaying it");
+  if (recovery.cardTop > recovery.stageTop + 4) throw new Error("The recovery card sits below the preview");
+  if (!recovery.currentSrc.startsWith("blob:")) throw new Error("The saved clip did not load into the preview");
+  if (!recovery.emptyHidden) throw new Error("The preview still says to upload a clip");
   if (recovery.starts !== 0) throw new Error("Reload started transcription.");
+  await page.click("#resume");
+  await page.waitForFunction(() => (
+    document.getElementById("recovery").hidden
+    && String(document.getElementById("previewVideo").currentSrc).startsWith("blob:")
+  ));
   await page.screenshot({ path: path.join(artifacts, "preview-recovery.png") });
 
   const summary = {

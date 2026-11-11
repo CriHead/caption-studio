@@ -3,8 +3,10 @@ import { groupWords, wordsFromText, chunksToWords } from "./captions.js";
 import { drawFrame, drawOverlay, paletteById, resolveLook } from "./draw.js";
 import { burstFiles, emojiFileForWord } from "./emoji.js";
 import { ensureFonts, familyName, scriptFontFile, scriptForText } from "./fonts.js";
-import { eachPcmWindow, fileKind, loadImage } from "./media.js";
+import { eachPcmWindow, fileKind, loadImage, resumeAudioContext } from "./media.js";
+import { resetPlacement } from "./place.js";
 import { renderMp4 } from "./render.js";
+import { detectKeepOut, unloadVision } from "./vision.js";
 import { clearSession, loadSession, saveCaptions, saveMedia, saveSettings, saveVoice } from "./session.js";
 import { releaseTranscriber, transcribeAudio } from "./transcribe.js";
 
@@ -35,6 +37,7 @@ const canvas = document.getElementById("stage");
 const ctx = canvas.getContext("2d", { alpha: true });
 const stageFrame = document.getElementById("stageFrame");
 const BUSY_KEY = "caption-studio-busy";
+const HEAVY_WORK = new Set(["transcribe", "render"]);
 const playBtn = document.getElementById("play");
 const scrub = document.getElementById("scrub");
 const timeLabel = document.getElementById("timeLabel");
@@ -73,6 +76,9 @@ const state = {
   quality: "720",
   motion: "",
   letterbox: false,
+  placeMode: "move",
+  keepOut: [],
+  previewStyleId: "",
   kind: null,
   file: null,
   image: null,
@@ -86,17 +92,24 @@ const state = {
   transcript: "",
   job: 0,
   playing: false,
+  userMuted: false,
+  voiceUrl: "",
   scrubTime: 0.2,
   resultUrl: "",
 };
 
 let lastPaintKey = "";
+let restorePromise = Promise.resolve();
 
 const previewVideo = document.getElementById("previewVideo");
+const previewVoice = document.getElementById("previewVoice");
 previewVideo.playsInline = true;
-previewVideo.muted = true;
 previewVideo.autoplay = false;
 previewVideo.preload = "metadata";
+previewVideo.muted = false;
+previewVideo.volume = 1;
+previewVoice.preload = "metadata";
+previewVoice.volume = 1;
 
 const emojiImages = {};
 
@@ -112,13 +125,20 @@ function lightDevice() {
 }
 
 function markBusy(reason) {
-  try { localStorage.setItem(BUSY_KEY, reason || "1"); } catch { /* private mode */ }
+  if (!HEAVY_WORK.has(reason)) return;
+  try { localStorage.setItem(BUSY_KEY, reason); } catch { /* private mode */ }
 }
 
 function clearBusy(reason) {
   try {
     if (reason && localStorage.getItem(BUSY_KEY) !== reason) return;
     localStorage.removeItem(BUSY_KEY);
+  } catch { /* ignore */ }
+}
+
+function clearBusyOnLeave() {
+  try {
+    if (!HEAVY_WORK.has(localStorage.getItem(BUSY_KEY))) clearBusy();
   } catch { /* ignore */ }
 }
 
@@ -134,22 +154,26 @@ function boot() {
     event.preventDefault();
     friendly();
   });
+  const releaseIfHidden = () => {
+    if (document.visibilityState === "hidden") clearBusyOnLeave();
+  };
+  window.addEventListener("pagehide", clearBusyOnLeave);
+  document.addEventListener("visibilitychange", releaseIfHidden);
   if (lightDevice()) modelEl.value = "tiny";
-  try {
-    if (localStorage.getItem(BUSY_KEY)) {
-      showRecovery();
-      studio.ready = true;
-      studio.blocked = true;
-      return;
-    }
-  } catch { /* ignore */ }
-  restoreSession();
+  let marker = "";
+  try { marker = localStorage.getItem(BUSY_KEY) || ""; } catch { /* private mode */ }
+  if (HEAVY_WORK.has(marker)) {
+    showRecovery();
+    studio.blocked = true;
+  } else {
+    clearBusy();
+  }
+  restorePromise = restoreSession();
 }
 
 function showRecovery() {
   document.getElementById("recovery").hidden = false;
-  document.getElementById("stageEmpty").hidden = false;
-  setStatus("Last session stopped unexpectedly.");
+  setStatus("Transcription or export was interrupted. Your clip is still on this device.");
 }
 
 function hideRecovery() {
@@ -159,6 +183,7 @@ function hideRecovery() {
 async function resumeSaved(lighter) {
   hideRecovery();
   clearBusy();
+  studio.blocked = false;
   if (lighter) {
     state.quality = "720";
     modelEl.value = "tiny";
@@ -167,8 +192,15 @@ async function resumeSaved(lighter) {
     });
     rememberSettings();
   }
-  studio.blocked = false;
-  await restoreSession();
+  await restorePromise;
+  if (!state.file) {
+    restorePromise = restoreSession();
+    await restorePromise;
+  }
+  if (state.kind === "video" && state.file && !previewVideo.currentSrc) attachPreviewUrl(state.file);
+  if (state.voiceFile && !previewVoice.currentSrc) attachVoiceUrl(state.voiceFile);
+  applyPreviewLevels();
+  if (state.file) await restartPreview();
 }
 
 function buildChoices() {
@@ -179,7 +211,7 @@ function buildChoices() {
     button.className = "style" + (item.id === state.styleId ? " selected" : "");
     button.dataset.style = item.id;
     button.setAttribute("aria-pressed", item.id === state.styleId ? "true" : "false");
-    button.innerHTML = `<img src="./previews/${item.id}.png" alt="" loading="lazy" decoding="async"><div class="meta"><b></b><small></small></div>`;
+    button.innerHTML = `<img src="./previews/${item.id}.png" alt="" loading="lazy" decoding="async"><canvas class="style-live" width="320" height="180" hidden></canvas><div class="meta"><b></b><small></small></div>`;
     button.querySelector("b").textContent = item.label;
     button.querySelector("small").textContent = item.blurb;
     button.querySelector("img").addEventListener("error", () => {
@@ -293,9 +325,20 @@ function wire() {
   document.getElementById("styles").addEventListener("click", (event) => {
     const button = event.target.closest("[data-style]");
     if (!button) return;
-    selectGroup("[data-style]", button, "style");
-    state.styleId = button.dataset.style;
-    studio.styleId = state.styleId;
+    state.previewStyleId = button.dataset.style;
+    markStyleCards();
+    restartPreview();
+    startCardPreview(state.previewStyleId);
+  });
+  document.getElementById("applyStyle").addEventListener("click", () => applyStyle());
+  document.getElementById("cancelStyle").addEventListener("click", () => cancelStyle());
+  document.getElementById("placeMode").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-place-mode]");
+    if (!button) return;
+    state.placeMode = button.dataset.placeMode === "bottom" ? "bottom" : "move";
+    document.querySelectorAll("[data-place-mode]").forEach((node) => {
+      node.classList.toggle("on", node === button);
+    });
     rememberSettings();
     restartPreview();
   });
@@ -352,20 +395,23 @@ function wire() {
   document.getElementById("land").addEventListener("click", () => setOrient(false));
   document.getElementById("vert").addEventListener("click", () => setOrient(true));
   playBtn.addEventListener("click", togglePlay);
+  document.getElementById("mute").addEventListener("click", toggleMute);
   scrub.addEventListener("input", () => {
     state.playing = false;
-    playBtn.textContent = "Play";
+    setPlaying(false);
     previewVideo.pause();
-    clearBusy("play");
+    previewVoice.pause();
     state.scrubTime = (Number(scrub.value) / 1000) * state.duration;
     if (state.kind === "video") {
-      previewVideo.currentTime = state.scrubTime;
+      try { previewVideo.currentTime = state.scrubTime; } catch { /* not ready yet */ }
+    }
+    if (state.voiceFile) {
+      try { previewVoice.currentTime = state.scrubTime; } catch { /* not ready yet */ }
     }
     syncScrub();
     paint();
   });
   previewVideo.addEventListener("loadedmetadata", () => {
-    if (!state.playing) clearBusy("preview");
     resizeCanvas();
     if (state.kind !== "video" || state.playing) return;
     if (Math.abs((previewVideo.currentTime || 0) - state.scrubTime) > 0.08) {
@@ -390,7 +436,7 @@ function wire() {
     themeBtn.textContent = light ? "Dark" : "Light";
     themeBtn.setAttribute("aria-pressed", light ? "true" : "false");
     themeBtn.setAttribute("aria-label", light ? "Switch to dark theme" : "Switch to light theme");
-    if (themeMeta) themeMeta.content = light ? "#F6F3EE" : "#0B1020";
+    if (themeMeta) themeMeta.content = light ? "#EAF3FF" : "#0B1020";
   };
   paintThemeButton();
   themeBtn.addEventListener("click", () => {
@@ -506,8 +552,19 @@ function setStatus(message, isError = false) {
 }
 
 function setProgress(ratio) {
+  if (ratio == null) {
+    bar.style.display = "none";
+    return;
+  }
   bar.style.display = "block";
   barFill.style.width = `${Math.max(0, Math.min(100, ratio * 100))}%`;
+}
+
+function openEdit(show) {
+  const fold = document.getElementById("editWords");
+  const note = document.getElementById("noSpeech");
+  if (fold && show) fold.open = true;
+  if (note) note.hidden = !show;
 }
 
 function clock(seconds) {
@@ -530,6 +587,7 @@ function currentSettings() {
     hex: hexEl.value,
     animation: state.animation,
     placement: state.placement,
+    placeMode: state.placeMode,
     vertical: state.vertical,
     quality: state.quality,
     motion: state.motion,
@@ -607,12 +665,10 @@ function releaseImage() {
 
 async function restoreSession() {
   try {
-    markBusy("restore");
     setStatus("Opening your saved clip…");
     const saved = await loadSession();
     const media = saved?.media;
     if (!media?.blob) {
-      clearBusy("restore");
       setStatus("Choose a photo or a short video to begin.");
       return;
     }
@@ -631,6 +687,10 @@ async function restoreSession() {
       state.voiceFile = new File([saved.voice.blob], saved.voice.name || "voice", {
         type: saved.voice.type || saved.voice.blob.type || "",
       });
+      attachVoiceUrl(state.voiceFile);
+    } else {
+      state.voiceFile = null;
+      attachVoiceUrl(null);
     }
     applySettings(saved.settings || {});
     showFileName();
@@ -647,14 +707,13 @@ async function restoreSession() {
     studio.words = activeWords();
     studio.restored = true;
     resizeCanvas();
+    applyPreviewLevels();
     await restartPreview();
-    clearBusy("restore");
     updateReadButton();
     setStatus(state.heardWords.length || textEl.value.trim()
       ? "Your clip is back. Press play when you want to watch it."
       : "Your clip is back. Press Read the speech when you want captions.");
   } catch (error) {
-    clearBusy();
     console.warn("Could not restore the saved clip.", error);
     setStatus("Choose a photo or a short video to begin.");
   } finally {
@@ -667,6 +726,10 @@ function applySettings(settings) {
   state.paletteId = settings.paletteId || catalog.defaultPalette;
   state.animation = settings.animation || "";
   state.placement = settings.placement || "auto";
+  state.placeMode = settings.placeMode === "bottom" ? "bottom" : "move";
+  document.querySelectorAll("[data-place-mode]").forEach((node) => {
+    node.classList.toggle("on", node.dataset.placeMode === state.placeMode);
+  });
   state.vertical = Boolean(settings.vertical);
   state.quality = settings.quality === "1080" ? "1080" : "720";
   state.motion = settings.motion || "";
@@ -724,6 +787,7 @@ async function startOver() {
   stopPlay();
   releaseImage();
   attachPreviewUrl(null);
+  attachVoiceUrl(null);
   hideResult();
   state.file = null;
   state.voiceFile = null;
@@ -731,6 +795,10 @@ async function startOver() {
   state.pcm = null;
   state.heardWords = [];
   state.transcript = "";
+  state.keepOut = [];
+  state.previewStyleId = "";
+  resetPlacement();
+  stopCardPreview();
   state.duration = STILL_SECONDS;
   state.scrubTime = 0.2;
   textEl.value = "";
@@ -822,10 +890,46 @@ function attachPreviewUrl(file) {
     previewVideo.load();
     return;
   }
-  markBusy("preview");
   state.videoUrl = URL.createObjectURL(file);
   previewVideo.preload = "metadata";
   previewVideo.src = state.videoUrl;
+  applyPreviewLevels();
+}
+
+function attachVoiceUrl(file) {
+  if (state.voiceUrl) URL.revokeObjectURL(state.voiceUrl);
+  state.voiceUrl = "";
+  previewVoice.pause();
+  if (!file) {
+    previewVoice.removeAttribute("src");
+    previewVoice.load();
+    applyPreviewLevels();
+    return;
+  }
+  state.voiceUrl = URL.createObjectURL(file);
+  previewVoice.preload = "metadata";
+  previewVoice.src = state.voiceUrl;
+  applyPreviewLevels();
+}
+
+function applyPreviewLevels() {
+  const voiceOn = Boolean(state.voiceFile);
+  previewVideo.muted = state.userMuted || voiceOn;
+  previewVideo.volume = 1;
+  previewVoice.muted = state.userMuted || !voiceOn;
+  previewVoice.volume = 1;
+  const button = document.getElementById("mute");
+  if (!button) return;
+  button.textContent = state.userMuted ? "Sound" : "Mute";
+  button.setAttribute("aria-pressed", state.userMuted ? "true" : "false");
+  button.setAttribute("aria-label", state.userMuted ? "Unmute preview" : "Mute preview");
+  studio.userMuted = state.userMuted;
+}
+
+function toggleMute() {
+  state.userMuted = !state.userMuted;
+  resumeAudioContext();
+  applyPreviewLevels();
 }
 
 async function onFile(file) {
@@ -839,6 +943,8 @@ async function onFile(file) {
   releaseImage();
   state.file = file;
   state.kind = fileKind(file);
+  state.keepOut = [];
+  resetPlacement();
   state.heardWords = [];
   state.transcript = "";
   state.pcm = null;
@@ -878,6 +984,7 @@ async function onFile(file) {
     await rememberMedia();
     rememberSettings();
     await restartPreview();
+    if (state.kind === "image" && !state.voiceFile) openEdit(true);
     scheduleSpeech();
   } catch (error) {
     if (job !== state.job) return;
@@ -888,6 +995,7 @@ async function onFile(file) {
 async function onAudio(file) {
   if (!file) {
     state.voiceFile = null;
+    attachVoiceUrl(null);
     if (state.kind === "image") state.duration = STILL_SECONDS;
     rememberVoice();
     restartPreview();
@@ -904,6 +1012,7 @@ async function onAudio(file) {
     setStatus("Reading the voice track…");
     if (job !== state.job) return;
     state.voiceFile = file;
+    attachVoiceUrl(file);
     state.pcm = null;
     state.heardWords = [];
     state.transcript = "";
@@ -977,8 +1086,10 @@ function scheduleSpeech(force) {
     clearBusy("transcribe");
     if (job !== speechJob) return;
     if (!found && !merged.length) {
-      setStatus("No speech track was found. Type a caption instead.", true);
+      setStatus("No speech track was found. Type a caption under Edit words.", true);
+      openEdit(true);
       updateReadButton();
+      setProgress(null);
       return;
     }
     const result = { text: texts.join(" "), chunks: merged, device, model: modelName, chunkCount };
@@ -992,11 +1103,12 @@ function scheduleSpeech(force) {
     studio.transcribeMs = performance.now() - started;
     heardEl.textContent = textEl.value.trim()
       ? "Using the caption you typed."
-      : (state.heardWords.length ? heardLine() : "No speech detected. Type a caption above.");
-    setProgress(0.6);
+      : (state.heardWords.length ? "Captions follow the words as they are spoken." : "No speech detected. Type a caption under Edit words.");
+    openEdit(!state.heardWords.length && !textEl.value.trim());
+    setProgress(null);
     setStatus(state.heardWords.length
-      ? `Transcript ready${result.device ? ` (${result.device})` : ""}. Preview is on this device.`
-      : "No speech detected. Type a caption above.");
+      ? `Transcript ready${result.device ? ` (${result.device})` : ""}. Captions follow the speech.`
+      : "No speech detected. Type a caption under Edit words.");
     rememberCaptions();
     renderLines();
     return restartPreview();
@@ -1087,8 +1199,12 @@ function activeScript(words) {
   return scriptForText(words.map((word) => word.text).join(" "));
 }
 
+function shownStyleId() {
+  return state.previewStyleId || state.styleId;
+}
+
 function currentLook(script) {
-  const raw = catalog.styles[state.styleId] || catalog.styles[catalog.defaultStyle];
+  const raw = catalog.styles[shownStyleId()] || catalog.styles[catalog.defaultStyle];
   const palette = paletteById(catalog, state.paletteId);
   const look = resolveLook(raw, palette, state.vertical);
   const scriptFile = scriptFontFile(script);
@@ -1143,6 +1259,8 @@ function sceneAt(time) {
     groups: groupWords(words, look.wordsPerLine),
     look,
     placement: state.placement,
+    placeMode: state.placeMode,
+    keepOut: state.keepOut,
     animation,
     cta: ctaEl.value.trim(),
     emojiOn: emojiEl.checked,
@@ -1227,14 +1345,18 @@ let playFrom = 0;
 
 function togglePlay() {
   if (!state.file) return;
+  resumeAudioContext();
+  applyPreviewLevels();
   if (state.playing) {
     stopPlay();
     return;
   }
-  state.playing = true;
-  playBtn.textContent = "Pause";
+  setPlaying(true);
+  if (state.voiceFile) {
+    try { previewVoice.currentTime = state.scrubTime; } catch { /* the voice element may not be ready yet */ }
+    previewVoice.play().catch(() => {});
+  }
   if (state.kind === "video") {
-    markBusy("play");
     try { previewVideo.currentTime = state.scrubTime; } catch { /* the element may not be ready yet */ }
     previewVideo.play().then(() => {
       requestAnimationFrame(tickVideo);
@@ -1246,16 +1368,32 @@ function togglePlay() {
   }
 }
 
+function setPlaying(on) {
+  state.playing = on;
+  playBtn.classList.toggle("is-playing", on);
+  playBtn.setAttribute("aria-label", on ? "Pause preview" : "Play preview");
+}
+
 function stopPlay() {
-  state.playing = false;
-  playBtn.textContent = "Play";
+  setPlaying(false);
   previewVideo.pause();
-  clearBusy("play");
+  previewVoice.pause();
+}
+
+function syncVoiceClock(time) {
+  if (!state.voiceFile || !state.playing) return;
+  if (previewVoice.paused && !state.userMuted) previewVoice.play().catch(() => {});
+  if (Number.isFinite(previewVoice.duration) && time >= previewVoice.duration) return;
+  if (Math.abs((previewVoice.currentTime || 0) - time) > 0.35) {
+    try { previewVoice.currentTime = time; } catch { /* seek can wait */ }
+  }
 }
 
 function tickVideo() {
   if (!state.playing) return;
-  state.scrubTime = previewVideo.currentTime || 0;
+    state.scrubTime = previewVideo.currentTime || 0;
+  syncVoiceClock(state.scrubTime);
+  maybeSample();
   paint();
   syncScrub();
   requestAnimationFrame(tickVideo);
@@ -1270,9 +1408,144 @@ function tickStill(now) {
     playOrigin = now;
   }
   state.scrubTime = time;
+  syncVoiceClock(time);
+  maybeSample();
   paint();
   syncScrub();
   requestAnimationFrame(tickStill);
+}
+
+function markStyleCards() {
+  const actions = document.getElementById("styleActions");
+  const previewing = state.previewStyleId && state.previewStyleId !== state.styleId;
+  if (actions) actions.hidden = !previewing;
+  document.querySelectorAll("[data-style]").forEach((node) => {
+    const applied = node.dataset.style === state.styleId;
+    const preview = node.dataset.style === state.previewStyleId;
+    node.classList.toggle("selected", applied);
+    node.classList.toggle("previewing", preview);
+    node.setAttribute("aria-pressed", applied ? "true" : "false");
+    const live = node.querySelector(".style-live");
+    if (live && !preview) live.hidden = true;
+  });
+}
+
+function applyStyle() {
+  if (!state.previewStyleId) return;
+  state.styleId = state.previewStyleId;
+  state.previewStyleId = "";
+  studio.styleId = state.styleId;
+  stopCardPreview();
+  markStyleCards();
+  rememberSettings();
+  restartPreview();
+}
+
+function cancelStyle() {
+  state.previewStyleId = "";
+  stopCardPreview();
+  markStyleCards();
+  restartPreview();
+}
+
+let cardFrame = 0;
+
+function stopCardPreview() {
+  if (cardFrame) cancelAnimationFrame(cardFrame);
+  cardFrame = 0;
+}
+
+function startCardPreview(id) {
+  stopCardPreview();
+  const button = document.querySelector(`[data-style="${id}"]`);
+  const live = button?.querySelector(".style-live");
+  if (!live) return;
+  live.hidden = false;
+  const ctx = live.getContext("2d", { alpha: true });
+  const started = performance.now();
+  const raw = catalog.styles[id] || catalog.styles[catalog.defaultStyle];
+  const look = resolveLook(raw, paletteById(catalog, state.paletteId), false);
+  const tick = (now) => {
+    if (state.previewStyleId !== id) return;
+    const time = ((now - started) / 1000) % 1.8;
+    const words = [{ text: "Hello", start: 0, end: 1.8 }];
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, live.width, live.height);
+    ctx.setTransform(live.width / 1280, 0, 0, live.height / 720, 0, 0);
+    drawOverlay(ctx, {
+      width: 1280,
+      height: 720,
+      time,
+      duration: 1.8,
+      words,
+      groups: groupWords(words, look.wordsPerLine || 2),
+      look,
+      placement: "center",
+      placeMode: "bottom",
+      animation: look.animation,
+      emojiOn: false,
+      letterbox: false,
+      script: "en",
+    });
+    cardFrame = requestAnimationFrame(tick);
+  };
+  cardFrame = requestAnimationFrame(tick);
+}
+
+let sampling = false;
+let lastSampleAt = 0;
+
+function rememberSample(time, boxes) {
+  const next = state.keepOut.filter((sample) => Math.abs(sample.time - time) > 0.2);
+  next.push({ time, boxes });
+  next.sort((a, b) => a.time - b.time);
+  if (next.length > 80) next.splice(0, next.length - 80);
+  state.keepOut = next;
+  studio.keepOut = next;
+}
+
+function maybeSample(force) {
+  if (state.placeMode !== "move" || sampling || !state.file) return;
+  const now = performance.now();
+  if (!force && now - lastSampleAt < 320) return;
+  const source = state.kind === "video" ? previewVideo : state.image;
+  if (!source) return;
+  if (state.kind === "video" && previewVideo.readyState < 2) return;
+  lastSampleAt = now;
+  sampling = true;
+  const time = state.kind === "video" ? (previewVideo.currentTime || 0) : state.scrubTime;
+  detectKeepOut(source).then((boxes) => {
+    rememberSample(time, boxes);
+  }).catch(() => {}).finally(() => {
+    sampling = false;
+  });
+}
+
+async function sampleClip() {
+  if (state.placeMode !== "move" || !state.file) return;
+  const source = state.kind === "video" ? previewVideo : state.image;
+  if (!source) return;
+  if (state.kind !== "video") {
+    rememberSample(0, await detectKeepOut(source));
+    return;
+  }
+  const steps = Math.min(24, Math.max(4, Math.ceil(state.duration)));
+  const gap = state.duration / steps;
+  const back = previewVideo.currentTime || 0;
+  for (let index = 0; index < steps; index += 1) {
+    const time = Math.min(state.duration - 0.05, index * gap);
+    try { previewVideo.currentTime = time; } catch { break; }
+    await new Promise((resolve) => {
+      const done = () => {
+        previewVideo.removeEventListener("seeked", done);
+        resolve();
+      };
+      previewVideo.addEventListener("seeked", done);
+      setTimeout(done, 700);
+    });
+    rememberSample(time, await detectKeepOut(previewVideo));
+  }
+  try { previewVideo.currentTime = back; } catch { /* leave the playhead */ }
 }
 
 function hideResult() {
@@ -1302,7 +1575,11 @@ async function makeVideo() {
     return;
   }
   releaseTranscriber();
+  if (state.previewStyleId) applyStyle();
   stopPlay();
+  await sampleClip();
+  await unloadVision();
+  resetPlacement();
   markBusy("render");
   go.disabled = true;
   studio.phase = "rendering";
@@ -1322,6 +1599,8 @@ async function makeVideo() {
       groups: groupWords(words, look.wordsPerLine),
       look,
       placement: state.placement,
+      placeMode: state.placeMode,
+      keepOut: state.keepOut,
       animation,
       cta: ctaEl.value.trim(),
       emojiOn: emojiEl.checked,
