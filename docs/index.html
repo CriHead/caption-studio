@@ -7,8 +7,8 @@
   <meta name="description" content="Add captions to a photo or short video in your browser. Nothing is uploaded.">
   <title>Caption Studio</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect rx='8' width='32' height='32' fill='%232b241f'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-size='16' fill='%23f6f1ea' font-family='Georgia'%3EA%3C/text%3E%3C/svg%3E">
-  <script type="module" crossorigin src="./assets/index-Bpna6dvG.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-BC5vMDro.css">
+  <script type="module" crossorigin src="./assets/index-Bk2URUGA.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-NVuTgUp9.css">
 </head>
 <body>
   <div class="wrap">
@@ -17,15 +17,17 @@
       <p>Upload a photo or video, pick a look, and save.</p>
     </header>
 
-    <p class="notice">Your photo or video never leaves this device. Speech is transcribed here in the browser, captions are drawn here, and the MP4 is saved here. Nothing is uploaded.</p>
+    <p class="notice">Your photo or video never leaves this device. Speech is transcribed here in the browser, captions are drawn here, and the MP4 is saved here. Nothing is uploaded. If the page reloads, your clip and captions come back.</p>
 
-    <form id="form" autocomplete="off">
-      <label class="upload" id="drop">
-        <input type="file" id="file" name="file" accept="video/*,image/png,image/jpeg,image/webp,image/jpg">
+    <div id="form">
+      <div class="upload" id="drop">
         <strong>Upload a video or image</strong>
         <span>Tap or drop a file here. Videos up to 60 seconds, files up to 50 MB. Saved videos are 720p.</span>
+        <button type="button" class="pill choose" id="choose">Choose a file</button>
         <div class="file-name" id="fileName"></div>
-      </label>
+        <button type="button" class="text-button" id="reset" hidden>Start over</button>
+      </div>
+      <input type="file" id="file" accept="video/*,image/png,image/jpeg,image/webp,image/jpg" hidden>
 
       <h2>Caption text</h2>
       <textarea id="text" name="text" placeholder="Needed for a photo. Optional for a video — we'll caption the speech if you leave this blank."></textarea>
@@ -67,7 +69,7 @@
 
       <h2>Language</h2>
       <select id="lang" name="lang"></select>
-      <p class="hint">Used when we caption speech. The first run downloads a small Whisper model from Hugging Face and keeps it in this browser.</p>
+      <p class="hint">Used when a clip is transcribed. Changing it, or any other look, only updates the preview.</p>
       <label class="optional">Speech model
         <select id="model">
           <option value="tiny" selected>Tiny — faster, lighter on a phone</option>
@@ -86,10 +88,10 @@
         <button type="button" id="vert">Vertical</button>
       </div>
 
-      <button type="submit" class="go" id="go">Make video</button>
+      <button type="button" class="go" id="go">Make video</button>
       <div class="status" id="status" role="status" aria-live="polite"></div>
       <div class="bar" id="bar"><i></i></div>
-    </form>
+    </div>
 
     <div class="result" id="result">
       <video id="player" controls playsinline></video>

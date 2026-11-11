@@ -5,6 +5,7 @@ import { burstFiles, emojiFileForWord } from "./emoji.js";
 import { ensureFonts, familyName, scriptFontFile, scriptForText } from "./fonts.js";
 import { decodeAudio, fileKind, loadImage, probeVideo, sliceAudio, toMono16k } from "./media.js";
 import { renderMp4 } from "./render.js";
+import { clearSession, loadSession, saveCaptions, saveMedia, saveSettings, saveVoice } from "./session.js";
 import { transcribeAudio } from "./transcribe.js";
 
 const MAX_BYTES = 50 * 1024 * 1024;
@@ -40,16 +41,21 @@ const ctaEl = document.getElementById("cta");
 const emojiEl = document.getElementById("emoji");
 
 const studio = {
-  ready: true,
+  ready: false,
+  restored: false,
   phase: "idle",
   words: [],
   transcript: "",
   device: "",
   model: "",
   transcribeMs: 0,
+  transcribeStarts: 0,
   renderMs: 0,
   lastBlob: null,
   error: null,
+  fileName: "",
+  styleId: catalog.defaultStyle,
+  whenSaved: Promise.resolve(),
 };
 window.__studio = studio;
 
@@ -66,7 +72,7 @@ const state = {
   duration: STILL_SECONDS,
   sourceWidth: 1280,
   sourceHeight: 720,
-  audioBuffer: null,
+  voiceFile: null,
   pcm: null,
   heardWords: [],
   transcript: "",
@@ -79,13 +85,13 @@ const state = {
 const previewVideo = document.createElement("video");
 previewVideo.playsInline = true;
 previewVideo.loop = true;
-previewVideo.preload = "auto";
+previewVideo.preload = "metadata";
 
 const emojiImages = {};
 
 buildChoices();
 wire();
-setStatus("Choose a photo or a short video to begin.");
+restoreSession();
 
 function buildChoices() {
   const styles = document.getElementById("styles");
@@ -95,7 +101,7 @@ function buildChoices() {
     button.className = "style" + (item.id === state.styleId ? " selected" : "");
     button.dataset.style = item.id;
     button.setAttribute("aria-pressed", item.id === state.styleId ? "true" : "false");
-    button.innerHTML = `<img src="./previews/${item.id}.png" alt=""><div class="meta"><b></b><small></small></div>`;
+    button.innerHTML = `<img src="./previews/${item.id}.png" alt="" loading="lazy" decoding="async"><div class="meta"><b></b><small></small></div>`;
     button.querySelector("b").textContent = item.label;
     button.querySelector("small").textContent = item.blurb;
     button.querySelector("img").addEventListener("error", () => {
@@ -187,20 +193,32 @@ function wire() {
       onFile(file);
     }
   });
+  document.getElementById("choose").addEventListener("click", () => fileInput.click());
+  document.getElementById("reset").addEventListener("click", () => {
+    if (window.confirm("Clear this clip and start over?")) studio.whenSaved = startOver();
+  });
   fileInput.addEventListener("change", () => {
-    if (fileInput.files[0]) onFile(fileInput.files[0]);
+    const next = fileInput.files[0];
+    if (next) onFile(next);
+    fileInput.value = "";
   });
   audioInput.addEventListener("change", () => onAudio(audioInput.files[0] || null));
   textEl.addEventListener("input", () => {
-  heardEl.textContent = textEl.value.trim() ? "Using the caption you typed." : heardLine();
-  if (textEl.value.trim() && state.file) setStatus("Preview ready. It stays on this device.");
-  restartPreview();
+    heardEl.textContent = textEl.value.trim() ? "Using the caption you typed." : heardLine();
+    if (textEl.value.trim() && state.file) setStatus("Preview ready. It stays on this device.");
+    rememberSettings();
+    restartPreview();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && event.target.matches("input")) event.preventDefault();
   });
   document.getElementById("styles").addEventListener("click", (event) => {
     const button = event.target.closest("[data-style]");
     if (!button) return;
     selectGroup("[data-style]", button, "style");
     state.styleId = button.dataset.style;
+    studio.styleId = state.styleId;
+    rememberSettings();
     restartPreview();
   });
   document.getElementById("swatches").addEventListener("click", (event) => {
@@ -210,6 +228,7 @@ function wire() {
     state.paletteId = button.dataset.color;
     hexEl.value = "";
     colorLabel.textContent = button.getAttribute("aria-label");
+    rememberSettings();
     restartPreview();
   });
   hexEl.addEventListener("input", () => {
@@ -218,6 +237,7 @@ function wire() {
     state.paletteId = value;
     document.querySelectorAll("[data-color]").forEach((node) => node.classList.remove("selected"));
     colorLabel.textContent = value;
+    rememberSettings();
     restartPreview();
   });
   document.getElementById("animations").addEventListener("click", (event) => {
@@ -225,6 +245,7 @@ function wire() {
     if (!button) return;
     selectGroup("[data-animation]", button, "animation");
     state.animation = button.dataset.animation || "";
+    rememberSettings();
     restartPreview();
   });
   document.getElementById("placements").addEventListener("click", (event) => {
@@ -232,12 +253,24 @@ function wire() {
     if (!button) return;
     selectGroup("#placements .pill", button, "placement");
     state.placement = button.dataset.placement || "auto";
+    rememberSettings();
     restartPreview();
   });
-  langEl.addEventListener("change", () => scheduleSpeech());
-  modelEl.addEventListener("change", () => scheduleSpeech());
-  ctaEl.addEventListener("input", () => restartPreview());
-  emojiEl.addEventListener("change", () => restartPreview());
+  langEl.addEventListener("change", () => {
+    rememberSettings();
+    restartPreview();
+  });
+  modelEl.addEventListener("change", () => {
+    rememberSettings();
+  });
+  ctaEl.addEventListener("input", () => {
+    rememberSettings();
+    restartPreview();
+  });
+  emojiEl.addEventListener("change", () => {
+    rememberSettings();
+    restartPreview();
+  });
   document.getElementById("land").addEventListener("click", () => setOrient(false));
   document.getElementById("vert").addEventListener("click", () => setOrient(true));
   playBtn.addEventListener("click", togglePlay);
@@ -252,6 +285,12 @@ function wire() {
     syncScrub();
     paint();
   });
+  previewVideo.addEventListener("loadedmetadata", () => {
+    if (state.kind !== "video" || state.playing) return;
+    if (Math.abs((previewVideo.currentTime || 0) - state.scrubTime) > 0.08) {
+      try { previewVideo.currentTime = state.scrubTime; } catch { /* seek can wait until data arrives */ }
+    }
+  });
   previewVideo.addEventListener("loadeddata", () => {
     if (state.kind === "video" && !state.playing) paint();
   });
@@ -260,10 +299,7 @@ function wire() {
     state.scrubTime = previewVideo.currentTime || 0;
     syncScrub();
   });
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    makeVideo();
-  });
+  go.addEventListener("click", () => makeVideo());
 }
 
 function selectGroup(selector, button, kind) {
@@ -275,17 +311,24 @@ function selectGroup(selector, button, kind) {
   if (kind) button.setAttribute("aria-pressed", "true");
 }
 
-function setOrient(vertical) {
+function setOrient(vertical, options = {}) {
   state.vertical = vertical;
   document.getElementById("land").classList.toggle("on", !vertical);
   document.getElementById("vert").classList.toggle("on", vertical);
   resizeCanvas();
-  restartPreview();
+  if (!options.silent) {
+    rememberSettings();
+    restartPreview();
+  }
 }
 
 function resizeCanvas() {
-  canvas.width = state.vertical ? 720 : 1280;
-  canvas.height = state.vertical ? 1280 : 720;
+  const width = state.vertical ? 720 : 1280;
+  const height = state.vertical ? 1280 : 720;
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
 }
 
 function setStatus(message, isError = false) {
@@ -312,19 +355,260 @@ function heardLine() {
   return `Heard: ${state.transcript}`;
 }
 
+function currentSettings() {
+  return {
+    text: textEl.value,
+    styleId: state.styleId,
+    paletteId: state.paletteId,
+    hex: hexEl.value,
+    animation: state.animation,
+    placement: state.placement,
+    vertical: state.vertical,
+    lang: langEl.value,
+    model: modelEl.value,
+    cta: ctaEl.value,
+    emoji: emojiEl.checked,
+    scrubTime: state.scrubTime,
+  };
+}
+
+let saveEpoch = 0;
+let saveChain = Promise.resolve();
+
+function guarded(work) {
+  const epoch = saveEpoch;
+  const job = saveChain.then(async () => {
+    if (epoch !== saveEpoch) return;
+    await work();
+    if (epoch !== saveEpoch) await clearSession().catch(() => {});
+  }).catch(() => {});
+  saveChain = job;
+  studio.whenSaved = job;
+  return job;
+}
+
+function rememberSettings() {
+  const snapshot = currentSettings();
+  studio.styleId = snapshot.styleId;
+  return guarded(() => saveSettings(snapshot));
+}
+
+function rememberMedia() {
+  if (!state.file) return Promise.resolve();
+  const file = state.file;
+  const record = {
+    blob: file,
+    name: file.name,
+    type: file.type || "",
+    size: file.size,
+    lastModified: file.lastModified || Date.now(),
+    kind: state.kind,
+    duration: state.duration,
+    sourceWidth: state.sourceWidth,
+    sourceHeight: state.sourceHeight,
+  };
+  return guarded(() => saveMedia(record));
+}
+
+function rememberVoice() {
+  const voice = state.voiceFile;
+  const record = voice ? { blob: voice, name: voice.name, type: voice.type || "" } : null;
+  return guarded(() => saveVoice(record));
+}
+
+function rememberCaptions() {
+  const record = {
+    transcript: state.transcript || "",
+    heardWords: state.heardWords || [],
+  };
+  return guarded(() => saveCaptions(record));
+}
+
+function releaseImage() {
+  if (state.image && typeof state.image.close === "function") state.image.close();
+  state.image = null;
+}
+
+async function restoreSession() {
+  try {
+    setStatus("Checking for a saved clip…");
+    const saved = await loadSession();
+    const media = saved?.media;
+    if (!media?.blob) {
+      setStatus("Choose a photo or a short video to begin.");
+      return;
+    }
+    const file = new File([media.blob], media.name || "clip", {
+      type: media.type || media.blob.type || "",
+      lastModified: media.lastModified || Date.now(),
+    });
+    state.file = file;
+    state.kind = media.kind || fileKind(file);
+    state.duration = media.duration || STILL_SECONDS;
+    state.sourceWidth = media.sourceWidth || 1280;
+    state.sourceHeight = media.sourceHeight || 720;
+    state.transcript = saved.captions?.transcript || "";
+    state.heardWords = Array.isArray(saved.captions?.heardWords) ? saved.captions.heardWords : [];
+    if (saved.voice?.blob) {
+      state.voiceFile = new File([saved.voice.blob], saved.voice.name || "voice", {
+        type: saved.voice.type || saved.voice.blob.type || "",
+      });
+    }
+    applySettings(saved.settings || {});
+    showFileName();
+    heardEl.textContent = textEl.value.trim() ? "Using the caption you typed." : heardLine();
+    if (state.kind === "image") {
+      state.image = await loadImage(file);
+      state.sourceWidth = state.image.width || state.sourceWidth;
+      state.sourceHeight = state.image.height || state.sourceHeight;
+    } else if (state.kind === "video") {
+      attachPreviewUrl(file);
+    }
+    previewSection.hidden = false;
+    studio.duration = state.duration;
+    studio.transcript = state.transcript;
+    studio.words = activeWords();
+    studio.restored = true;
+    resizeCanvas();
+    await restartPreview();
+    if (!textEl.value.trim() && !state.heardWords.length && state.kind === "video") {
+      const audio = await pcmFromFile(file, state.duration);
+      state.pcm = audio?.pcm || null;
+      scheduleSpeech();
+    } else {
+      setStatus("Your clip is back. It stayed on this device.");
+    }
+  } catch (error) {
+    console.warn("Could not restore the saved clip.", error);
+    setStatus("Choose a photo or a short video to begin.");
+  } finally {
+    studio.ready = true;
+  }
+}
+
+function applySettings(settings) {
+  state.styleId = settings.styleId || catalog.defaultStyle;
+  state.paletteId = settings.paletteId || catalog.defaultPalette;
+  state.animation = settings.animation || "";
+  state.placement = settings.placement || "auto";
+  state.vertical = Boolean(settings.vertical);
+  state.scrubTime = Number.isFinite(settings.scrubTime) ? settings.scrubTime : state.scrubTime;
+  textEl.value = settings.text || "";
+  hexEl.value = settings.hex || "";
+  ctaEl.value = settings.cta || "";
+  emojiEl.checked = Boolean(settings.emoji);
+  if (settings.lang) langEl.value = settings.lang;
+  if (settings.model) modelEl.value = settings.model;
+  studio.styleId = state.styleId;
+  reflectControls();
+  setOrient(state.vertical, { silent: true });
+}
+
+function reflectControls() {
+  document.querySelectorAll("[data-style]").forEach((node) => {
+    const on = node.dataset.style === state.styleId;
+    node.classList.toggle("selected", on);
+    node.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  document.querySelectorAll("[data-color]").forEach((node) => {
+    node.classList.toggle("selected", node.dataset.color === state.paletteId);
+  });
+  const palette = catalog.palettes[state.paletteId];
+  colorLabel.textContent = palette?.label || state.paletteId || "Pearl";
+  document.querySelectorAll("[data-animation]").forEach((node) => {
+    const on = (node.dataset.animation || "") === (state.animation || "");
+    node.classList.toggle("selected", on);
+    node.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  document.querySelectorAll("#placements .pill").forEach((node) => {
+    const on = node.dataset.placement === state.placement;
+    node.classList.toggle("selected", on);
+    node.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  document.getElementById("land").classList.toggle("on", !state.vertical);
+  document.getElementById("vert").classList.toggle("on", state.vertical);
+}
+
+async function startOver() {
+  saveEpoch += 1;
+  speechJob += 1;
+  state.job += 1;
+  stopPlay();
+  releaseImage();
+  attachPreviewUrl(null);
+  hideResult();
+  state.file = null;
+  state.voiceFile = null;
+  state.kind = null;
+  state.pcm = null;
+  state.heardWords = [];
+  state.transcript = "";
+  state.duration = STILL_SECONDS;
+  state.scrubTime = 0.2;
+  textEl.value = "";
+  hexEl.value = "";
+  ctaEl.value = "";
+  emojiEl.checked = false;
+  heardEl.textContent = "A few short words work best.";
+  previewSection.hidden = true;
+  showFileName();
+  applySettings({
+    styleId: catalog.defaultStyle,
+    paletteId: catalog.defaultPalette,
+    animation: "",
+    placement: "auto",
+    vertical: false,
+    lang: "auto",
+    model: "tiny",
+  });
+  studio.words = [];
+  studio.transcript = "";
+  studio.restored = false;
+  studio.phase = "idle";
+  try { await clearSession(); } catch { /* the page is already clear */ }
+  setStatus("Choose a photo or a short video to begin.");
+  resizeCanvas();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function sameFile(a, b) {
+  return Boolean(a && b && a.name === b.name && a.size === b.size && a.lastModified === b.lastModified);
+}
+
+function showFileName() {
+  fileName.textContent = state.file ? state.file.name : "";
+  document.getElementById("reset").hidden = !state.file;
+  studio.fileName = state.file ? state.file.name : "";
+}
+
+function attachPreviewUrl(file) {
+  if (state.videoUrl) URL.revokeObjectURL(state.videoUrl);
+  state.videoUrl = "";
+  if (!file || state.kind !== "video") {
+    previewVideo.removeAttribute("src");
+    previewVideo.load();
+    return;
+  }
+  state.videoUrl = URL.createObjectURL(file);
+  previewVideo.preload = "metadata";
+  previewVideo.src = state.videoUrl;
+}
+
 async function onFile(file) {
+  if (sameFile(state.file, file)) return;
   speechJob += 1;
   if (file.size > MAX_BYTES) {
     setStatus("Please keep files to 50 MB or less.", true);
     return;
   }
   stopPlay();
+  releaseImage();
   state.file = file;
   state.kind = fileKind(file);
   state.heardWords = [];
   state.transcript = "";
   state.pcm = null;
-  fileName.textContent = file.name;
+  showFileName();
   heardEl.textContent = "A few short words work best.";
   hideResult();
   const job = ++state.job;
@@ -334,9 +618,13 @@ async function onFile(file) {
       state.image = await loadImage(file);
       state.sourceWidth = state.image.width;
       state.sourceHeight = state.image.height;
-      state.duration = state.audioBuffer ? Math.min(MAX_SECONDS, state.audioBuffer.duration) : STILL_SECONDS;
-      if (state.image.height > state.image.width) setOrient(true);
-      else setOrient(false);
+      state.duration = STILL_SECONDS;
+      if (state.voiceFile) {
+        const audio = await pcmFromFile(state.voiceFile, MAX_SECONDS);
+        state.pcm = audio?.pcm || null;
+        if (audio) state.duration = Math.max(1, Math.min(MAX_SECONDS, audio.duration));
+      }
+      setOrient(state.image.height > state.image.width, { silent: true });
     } else if (state.kind === "video") {
       setStatus("Reading your video…");
       const meta = await probeVideo(file);
@@ -349,23 +637,23 @@ async function onFile(file) {
       state.duration = meta.duration;
       state.sourceWidth = meta.width;
       state.sourceHeight = meta.height;
-      if (state.videoUrl) URL.revokeObjectURL(state.videoUrl);
-      state.videoUrl = URL.createObjectURL(file);
-      previewVideo.src = state.videoUrl;
-      if (meta.height > meta.width) setOrient(true);
-      else setOrient(false);
-      setStatus("Reading the audio…");
-      const decoded = await decodeAudio(file);
+      attachPreviewUrl(file);
+      setOrient(meta.height > meta.width, { silent: true });
+      if (!state.voiceFile) {
+        setStatus("Reading the audio…");
+        const audio = await pcmFromFile(file, state.duration);
+        state.pcm = audio?.pcm || null;
+      }
       if (job !== state.job) return;
-      state.audioBuffer = decoded ? sliceAudio(decoded, state.duration) : null;
-      state.pcm = state.audioBuffer ? toMono16k(state.audioBuffer) : null;
     } else {
       throw new Error("Please upload a video (mp4, mov, webm) or an image (png, jpg, webp).");
     }
     if (job !== state.job) return;
-  previewSection.hidden = false;
-  studio.duration = state.duration;
-  state.scrubTime = Math.min(0.35, state.duration * 0.15);
+    previewSection.hidden = false;
+    studio.duration = state.duration;
+    state.scrubTime = Math.min(0.35, state.duration * 0.15);
+    await rememberMedia();
+    rememberSettings();
     await restartPreview();
     scheduleSpeech();
   } catch (error) {
@@ -375,35 +663,45 @@ async function onFile(file) {
 }
 
 async function onAudio(file) {
-  speechJob += 1;
   if (!file) {
-    if (state.kind === "image") {
-      state.audioBuffer = null;
-      state.pcm = null;
-      state.duration = STILL_SECONDS;
-    }
-    scheduleSpeech();
+    state.voiceFile = null;
+    if (state.kind === "image") state.duration = STILL_SECONDS;
+    rememberVoice();
+    restartPreview();
     return;
   }
+  if (sameFile(state.voiceFile, file)) return;
   if (file.size > MAX_BYTES) {
     setStatus("Please keep files to 50 MB or less.", true);
     return;
   }
+  speechJob += 1;
   const job = ++state.job;
   try {
     setStatus("Reading the voice track…");
-    const decoded = await decodeAudio(file);
+    const decoded = await pcmFromFile(file, state.kind === "video" ? state.duration : MAX_SECONDS);
     if (!decoded) throw new Error("Could not read that audio file.");
     if (job !== state.job) return;
-    const limit = state.kind === "video" ? state.duration : Math.min(MAX_SECONDS, decoded.duration);
-    state.audioBuffer = sliceAudio(decoded, limit);
-    state.pcm = toMono16k(state.audioBuffer);
-    if (state.kind === "image") state.duration = Math.max(1, state.audioBuffer.duration);
+    state.voiceFile = file;
+    state.pcm = decoded.pcm;
+    if (state.kind === "image") state.duration = Math.max(1, Math.min(MAX_SECONDS, decoded.duration));
+    state.heardWords = [];
+    state.transcript = "";
+    await rememberVoice();
     await restartPreview();
     scheduleSpeech();
   } catch (error) {
+    if (job !== state.job) return;
     setStatus(error.message || "Could not read that audio.", true);
   }
+}
+
+async function pcmFromFile(file, limit) {
+  const decoded = await decodeAudio(file);
+  if (!decoded) return null;
+  const clipped = sliceAudio(decoded, limit || decoded.duration);
+  const pcm = toMono16k(clipped);
+  return { pcm, duration: clipped.duration };
 }
 
 let speechJob = 0;
@@ -411,20 +709,24 @@ let speechJob = 0;
 function scheduleSpeech() {
   const job = ++speechJob;
   const typed = textEl.value.trim();
-  if (typed || !state.pcm) {
-    if (!typed && state.kind === "image" && !state.pcm) {
+  if (typed || state.heardWords.length || !state.pcm) {
+    if (!typed && !state.heardWords.length && state.kind === "image" && !state.pcm) {
       setStatus("For a photo, type a short caption, or add a voice track.");
     } else if (state.file) {
       setStatus("Preview ready. It stays on this device.");
     }
     studio.words = activeWords();
     studio.transcript = state.transcript;
+    state.pcm = null;
     return;
   }
   setStatus("Transcribing speech on this device…");
   setProgress(0.08);
   const started = performance.now();
-  transcribeAudio(state.pcm.slice(0), {
+  const pcm = state.pcm;
+  state.pcm = null;
+  studio.transcribeStarts += 1;
+  transcribeAudio(pcm, {
     model: modelEl.value,
     language: langEl.value === "auto" ? null : langEl.value,
     onProgress: (progress) => {
@@ -433,7 +735,7 @@ function scheduleSpeech() {
       if (progress.ratio != null) setProgress(0.08 + progress.ratio * 0.5);
     },
   }).then((result) => {
-    if (job !== speechJob || textEl.value.trim()) return;
+    if (job !== speechJob) return;
     state.transcript = result.text;
     state.heardWords = chunksToWords(result, state.duration);
     studio.transcript = result.text;
@@ -441,11 +743,14 @@ function scheduleSpeech() {
     studio.device = result.device || "";
     studio.model = result.model || "";
     studio.transcribeMs = performance.now() - started;
-    heardEl.textContent = state.heardWords.length ? heardLine() : "No speech detected. Type a caption above.";
+    heardEl.textContent = textEl.value.trim()
+      ? "Using the caption you typed."
+      : (state.heardWords.length ? heardLine() : "No speech detected. Type a caption above.");
     setProgress(0.6);
     setStatus(state.heardWords.length
       ? `Transcript ready${result.device ? ` (${result.device})` : ""}. Preview is on this device.`
       : "No speech detected. Type a caption above.");
+    rememberCaptions();
     return restartPreview();
   }).catch((error) => {
     if (job !== speechJob) return;
@@ -499,6 +804,9 @@ async function restartPreview() {
   paint();
   syncScrub();
   studio.words = words;
+  studio.styleId = state.styleId;
+  studio.transcript = state.transcript;
+  studio.fileName = state.file ? state.file.name : "";
 }
 
 function sceneAt(time) {
@@ -647,6 +955,12 @@ async function makeVideo() {
     await restartPreview();
     const script = activeScript(words);
     const { look, animation } = currentLook(script);
+    const audioSource = state.voiceFile || (state.kind === "video" ? state.file : null);
+    let audioBuffer = null;
+    if (audioSource) {
+      const decoded = await decodeAudio(audioSource);
+      audioBuffer = decoded ? sliceAudio(decoded, state.duration) : null;
+    }
     const scene = {
       words,
       groups: groupWords(words, look.wordsPerLine),
@@ -668,7 +982,7 @@ async function makeVideo() {
       imageWidth: state.sourceWidth,
       imageHeight: state.sourceHeight,
       file: state.file,
-      audioBuffer: state.audioBuffer ? sliceAudio(state.audioBuffer, state.duration) : null,
+      audioBuffer,
       scene,
     }, (ratio) => {
       setProgress(0.05 + ratio * 0.95);
@@ -685,7 +999,7 @@ async function makeVideo() {
     player.src = state.resultUrl;
     save.href = state.resultUrl;
     result.style.display = "block";
-    const heardAudio = Boolean(state.audioBuffer);
+    const heardAudio = Boolean(audioSource);
     const audioNote = heardAudio && !rendered.audioCodec
       ? " This browser could not add the sound, so the file is silent."
       : "";

@@ -16,15 +16,17 @@
       <p>Upload a photo or video, pick a look, and save.</p>
     </header>
 
-    <p class="notice">Your photo or video never leaves this device. Speech is transcribed here in the browser, captions are drawn here, and the MP4 is saved here. Nothing is uploaded.</p>
+    <p class="notice">Your photo or video never leaves this device. Speech is transcribed here in the browser, captions are drawn here, and the MP4 is saved here. Nothing is uploaded. If the page reloads, your clip and captions come back.</p>
 
-    <form id="form" autocomplete="off">
-      <label class="upload" id="drop">
-        <input type="file" id="file" name="file" accept="video/*,image/png,image/jpeg,image/webp,image/jpg">
+    <div id="form">
+      <div class="upload" id="drop">
         <strong>Upload a video or image</strong>
         <span>Tap or drop a file here. Videos up to 60 seconds, files up to 50 MB. Saved videos are 720p.</span>
+        <button type="button" class="pill choose" id="choose">Choose a file</button>
         <div class="file-name" id="fileName"></div>
-      </label>
+        <button type="button" class="text-button" id="reset" hidden>Start over</button>
+      </div>
+      <input type="file" id="file" accept="video/*,image/png,image/jpeg,image/webp,image/jpg" hidden>
 
       <h2>Caption text</h2>
       <textarea id="text" name="text" placeholder="Needed for a photo. Optional for a video — we'll caption the speech if you leave this blank."></textarea>
@@ -66,7 +68,7 @@
 
       <h2>Language</h2>
       <select id="lang" name="lang"></select>
-      <p class="hint">Used when we caption speech. The first run downloads a small Whisper model from Hugging Face and keeps it in this browser.</p>
+      <p class="hint">Used when a clip is transcribed. Changing it, or any other look, only updates the preview.</p>
       <label class="optional">Speech model
         <select id="model">
           <option value="tiny" selected>Tiny — faster, lighter on a phone</option>
@@ -85,10 +87,10 @@
         <button type="button" id="vert">Vertical</button>
       </div>
 
-      <button type="submit" class="go" id="go">Make video</button>
+      <button type="button" class="go" id="go">Make video</button>
       <div class="status" id="status" role="status" aria-live="polite"></div>
       <div class="bar" id="bar"><i></i></div>
-    </form>
+    </div>
 
     <div class="result" id="result">
       <video id="player" controls playsinline></video>
