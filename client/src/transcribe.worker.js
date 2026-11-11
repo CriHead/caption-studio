@@ -9,6 +9,7 @@ self.onmessage = async (event) => {
       model: message.model,
       language: message.language,
       prefer: message.prefer,
+      beams: message.beams,
       onProgress: (progress) => self.postMessage({ type: "progress", id: message.id, ...progress }),
     });
     self.postMessage({ type: "result", id: message.id, ...result });

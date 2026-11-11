@@ -227,6 +227,7 @@ textarea { min-height: 72px; resize: vertical; }
   transition: transform .16s ease, filter .16s ease, box-shadow .16s ease;
 }
 .primary.wide, .save { width: 100%; display: block; }
+.primary[hidden], .save[hidden] { display: none; }
 .primary:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
 .primary:not(:disabled):hover, .save:hover { filter: brightness(1.04); }
 .primary:not(:disabled):active, .save:active { transform: translateY(1px); }

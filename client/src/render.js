@@ -24,7 +24,9 @@ export async function renderMp4(spec, onProgress) {
 
   const { width, height, duration } = spec;
   const bitrate = spec.bitrate || (width >= 1920 || height >= 1920 ? 8_000_000 : 4_500_000);
-  const videoOk = await canEncodeVideo("avc", { width, height, bitrate });
+  const profile = Math.max(width, height) > 1280 ? "avc1.4D4028" : "avc1.4D401F";
+  const profileOk = await canEncodeVideo("avc", { width, height, bitrate, fullCodecString: profile, frameRate: FPS }).catch(() => false);
+  const videoOk = profileOk || await canEncodeVideo("avc", { width, height, bitrate, frameRate: FPS });
   if (!videoOk) {
     throw new Error("This browser cannot encode an H.264 MP4. Caption Studio needs a current Chrome or Safari.");
   }
@@ -35,15 +37,18 @@ export async function renderMp4(spec, onProgress) {
   const ctx = canvas.getContext("2d", { alpha: false });
   const frames = Math.max(1, Math.round(duration * FPS));
   const frameDur = duration / frames;
-  const sink = await openSink(mediabunny);
+  const sink = await openSink(mediabunny, "reserve");
 
   const output = new Output({ format: sink.format, target: sink.target });
   const videoSource = new CanvasSource(canvas, {
     codec: "avc",
     quality: new Quality({ bitrate }),
     keyFrameInterval: 2,
+    latencyMode: "quality",
+    ...(profileOk ? { fullCodecString: profile } : {}),
   });
-  output.addVideoTrack(videoSource);
+  const videoPackets = Math.ceil(frames * 1.5) + 8;
+  output.addVideoTrack(videoSource, { maximumPacketCount: videoPackets, frameRate: FPS });
 
   let audioCodec = null;
   let audioSource = null;
@@ -57,7 +62,7 @@ export async function renderMp4(spec, onProgress) {
         quality: new Quality({ bitrate: 128_000 }),
         transform: { numberOfChannels: 2, sampleRate: 48000 },
       });
-      output.addAudioTrack(audioSource);
+      output.addAudioTrack(audioSource, { maximumPacketCount: Math.ceil(duration * 80) + 16 });
       break;
     }
   }
@@ -225,7 +230,7 @@ async function streamAudio(file, audioSource, duration) {
   }
 }
 
-async function openSink(mediabunny) {
+async function openSink(mediabunny, fastStart = "reserve") {
   const { StreamTarget, BufferTarget, Mp4OutputFormat } = mediabunny;
   try {
     if (!navigator.storage?.getDirectory) throw new Error("no OPFS");
@@ -246,7 +251,7 @@ async function openSink(mediabunny) {
       },
     }), { chunked: true, chunkSize: 1024 * 1024 });
     return {
-      format: new Mp4OutputFormat({ fastStart: "fragmented" }),
+      format: new Mp4OutputFormat({ fastStart }),
       target,
       abort: async () => { if (!failed) await writable.abort?.(); },
       file: async () => handle.getFile(),
