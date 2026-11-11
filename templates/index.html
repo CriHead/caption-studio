@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Caption Studio</title>
+  <style>
+    :root {
+      --bg: #f6f1ea;
+      --card: #fffaf6;
+      --ink: #2b241f;
+      --muted: #7a6d63;
+      --line: #e6d9cd;
+      --rose: #c9937a;
+      --rose-deep: #9a6550;
+      --ok: #3d6b54;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink);
+      font-family: "Georgia", "Times New Roman", serif; }
+    body { min-height: 100vh; }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 28px 20px 80px; }
+    header h1 { font-weight: 500; font-size: 2rem; letter-spacing: -0.02em; margin: 0 0 6px; }
+    header p { margin: 0 0 28px; color: var(--muted); font-family: "Segoe UI", system-ui, sans-serif; font-size: 1rem; }
+    h2 { font-size: 1.05rem; font-weight: 500; margin: 28px 0 12px; letter-spacing: 0.02em; }
+    .upload { border: 1.5px dashed #d3bfb0; background: var(--card); border-radius: 18px;
+      padding: 36px 20px; text-align: center; cursor: pointer; transition: border-color .2s, background .2s; }
+    .upload:hover, .upload.drag { border-color: var(--rose); background: #fff; }
+    .upload strong { display: block; font-size: 1.25rem; margin-bottom: 6px; }
+    .upload span { font-family: "Segoe UI", system-ui, sans-serif; color: var(--muted); font-size: .92rem; }
+    .file-name { margin-top: 10px; font-family: "Segoe UI", system-ui, sans-serif; color: var(--rose-deep); }
+    textarea, input[type="text"] {
+      width: 100%; border: 1px solid var(--line); background: var(--card); border-radius: 12px;
+      padding: 14px 16px; font: 1rem/1.4 "Segoe UI", system-ui, sans-serif; color: var(--ink);
+      resize: vertical; min-height: 76px;
+    }
+    .hint { font-family: "Segoe UI", system-ui, sans-serif; color: var(--muted); font-size: .85rem; margin: 8px 0 0; }
+    .styles { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 12px; }
+    .style { border: 2px solid transparent; background: var(--card); border-radius: 14px; overflow: hidden;
+      cursor: pointer; text-align: left; padding: 0; font: inherit; color: inherit; box-shadow: 0 1px 0 rgba(0,0,0,.04); }
+    .style img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; background: #ddd2c8; }
+    .style .meta { padding: 8px 10px 10px; }
+    .style .meta b { display: block; font-weight: 600; font-size: .92rem; }
+    .style .meta small { font-family: "Segoe UI", system-ui, sans-serif; color: var(--muted); font-size: .75rem; }
+    .style.selected { border-color: var(--rose-deep); box-shadow: 0 0 0 3px rgba(154,101,80,.18); }
+    .swatches { display: flex; flex-wrap: wrap; gap: 10px; }
+    .swatch { width: 42px; height: 42px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 0 1px #d7c7ba;
+      cursor: pointer; padding: 0; background: #ccc; }
+    .swatch.selected { box-shadow: 0 0 0 2px var(--rose-deep); }
+    .swatch[title="pearl"] { background: #ece2d6; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .toggle { display: inline-flex; background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 4px; }
+    .toggle button { border: 0; background: transparent; padding: 8px 16px; border-radius: 999px;
+      font: 0.95rem "Segoe UI", system-ui, sans-serif; color: var(--muted); cursor: pointer; }
+    .toggle button.on { background: var(--ink); color: #fff; }
+    .go { display: block; width: 100%; margin-top: 28px; border: 0; border-radius: 999px; padding: 16px 20px;
+      background: var(--ink); color: #fff; font: 1.15rem/1 "Georgia", serif; cursor: pointer; }
+    .go:disabled { opacity: .5; cursor: wait; }
+    .status { margin-top: 16px; font-family: "Segoe UI", system-ui, sans-serif; color: var(--muted); min-height: 1.4em; }
+    .bar { height: 6px; background: var(--line); border-radius: 99px; overflow: hidden; margin-top: 8px; display: none; }
+    .bar > i { display: block; height: 100%; width: 0; background: var(--rose); transition: width .3s; }
+    .result { display: none; margin-top: 24px; background: var(--card); border-radius: 18px; padding: 16px; }
+    .result video { width: 100%; max-height: 70vh; border-radius: 12px; background: #111; }
+    .save { display: block; text-align: center; margin-top: 14px; border-radius: 999px; padding: 14px 20px;
+      background: var(--ok); color: #fff; text-decoration: none; font: 1.1rem "Georgia", serif; }
+    .err { color: #8a2f2f; }
+    .optional { margin-top: 8px; font-family: "Segoe UI", system-ui, sans-serif; font-size: .9rem; color: var(--muted); }
+    .optional input { margin-top: 6px; }
+    .anim-cat { margin: 14px 0 6px; font-family: "Segoe UI", system-ui, sans-serif;
+      font-size: .78rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+    .pills { display: flex; flex-wrap: wrap; gap: 8px; }
+    .pill { border: 1px solid var(--line); background: var(--card); border-radius: 999px;
+      padding: 7px 12px; font: 0.88rem "Segoe UI", system-ui, sans-serif; color: var(--ink); cursor: pointer; }
+    .pill.selected { background: var(--ink); color: #fff; border-color: var(--ink); }
+    select {
+      width: 100%; max-width: 320px; border: 1px solid var(--line); background: var(--card);
+      border-radius: 12px; padding: 12px 14px; font: 1rem "Segoe UI", system-ui, sans-serif; color: var(--ink);
+    }
+    .check { display: flex; align-items: center; gap: 8px; margin-top: 10px;
+      font-family: "Segoe UI", system-ui, sans-serif; color: var(--ink); }
+    .check input { width: 18px; height: 18px; }
+    input#cta { min-height: 44px; resize: none; }
+    .notice {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      font-size: .88rem; color: #5c4f46;
+      background: #efe4d8; border-radius: 14px;
+      padding: 12px 14px; margin: 0 0 22px; line-height: 1.45;
+    }
+    @media (min-width: 720px) {
+      header h1 { font-size: 2.4rem; }
+    }
+    @media (max-width: 520px) {
+      .wrap { padding: 18px 14px 64px; }
+      header h1 { font-size: 1.7rem; }
+      .styles { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 10px; }
+      .go, .save { padding: 16px 18px; font-size: 1.12rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Caption Studio</h1>
+      <p>Upload a photo or video, pick a look, and save.</p>
+    </header>
+
+    <p class="notice">Files you upload are processed on Hugging Face servers and deleted after your video is ready. Nothing is kept on this Space after rendering.</p>
+
+    <form id="form" autocomplete="off">
+      <label class="upload" id="drop">
+        <input type="file" id="file" name="file" accept="video/*,image/png,image/jpeg,image/webp,image/jpg" hidden>
+        <strong>Upload a video or image</strong>
+        <span>Tap or drop a file here. Videos up to {{ max_seconds }} seconds, files up to {{ max_mb }} MB. Saved videos are 720p.</span>
+        <div class="file-name" id="fileName"></div>
+      </label>
+
+      <h2>Caption text</h2>
+      <textarea id="text" name="text" placeholder="Needed for a photo. Optional for a video — we'll caption the speech if you leave this blank."></textarea>
+      <p class="hint">A few short words work best.</p>
+      <label class="optional">Optional voice track (for a photo, or to replace the video's audio)
+        <input type="file" id="audio" name="audio" accept="audio/*">
+      </label>
+
+      <h2>Style</h2>
+      <div class="styles" id="styles">
+        {% for s in styles %}
+        <button type="button" class="style{% if s.id == default_style %} selected{% endif %}" data-style="{{ s.id }}" aria-pressed="{{ 'true' if s.id == default_style else 'false' }}">
+          <img src="/previews/{{ s.id }}.png" alt="" onerror="this.style.background='#e8ddd3'">
+          <div class="meta"><b>{{ s.label }}</b><small>{{ s.blurb }}</small></div>
+        </button>
+        {% endfor %}
+      </div>
+
+      <h2>Color</h2>
+      <div class="swatches" id="swatches">
+        {% for p in palettes %}
+        <button type="button" class="swatch{% if p.id == default_palette %} selected{% endif %}" data-color="{{ p.id }}" title="{{ p.label }}" style="background:{{ p.swatch }}" aria-label="{{ p.label }}"></button>
+        {% endfor %}
+      </div>
+      <p class="hint" id="colorLabel">Pearl</p>
+      <p class="optional">Or a custom hex
+        <input type="text" id="hex" placeholder="#C9A36A" style="min-height:44px;margin-top:6px">
+      </p>
+
+
+      <h2>Animation</h2>
+      <p class="hint">Leave on Auto to use the style’s own motion. Everything stays smooth by default.</p>
+      <div class="anim-cat">Style default</div>
+      <div class="pills">
+        <button type="button" class="pill selected" data-animation="" aria-pressed="true">Auto</button>
+      </div>
+      {% set cat_order = ['Smooth','Playful','Cinematic','Cool','Letters','Fun / Emoji','More'] %}
+      {% for cat in cat_order %}
+        {% set items = animations | selectattr('category', 'equalto', cat) | list %}
+        {% if items %}
+      <div class="anim-cat">{{ cat }}</div>
+      <div class="pills">
+        {% for a in items %}
+        <button type="button" class="pill" data-animation="{{ a.id }}">{{ a.label }}</button>
+        {% endfor %}
+      </div>
+        {% endif %}
+      {% endfor %}
+
+      <h2>Placement</h2>
+      <p class="hint">Where the captions sit. Auto keeps them near the subject, in a safe margin.</p>
+      <div class="pills" id="placements">
+        {% for pl in placements %}
+        <button type="button" class="pill{% if pl.id == 'auto' %} selected{% endif %}" data-placement="{{ pl.id }}" aria-pressed="{{ 'true' if pl.id == 'auto' else 'false' }}">{{ pl.label }}</button>
+        {% endfor %}
+      </div>
+
+      <h2>Language</h2>
+      <select id="lang" name="lang">
+        {% for l in languages %}
+        <option value="{{ l.id }}"{% if l.id == 'auto' %} selected{% endif %}>{{ l.label }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">Used when we caption speech. Spanish, French, and others work; type the text yourself for a photo.</p>
+
+      <h2>Call to action</h2>
+      <input type="text" id="cta" name="cta" placeholder="Shop now (optional)" style="min-height:44px">
+      <p class="hint">Adds a button and a click ripple near the end, or on a matching word.</p>
+      <label class="check"><input type="checkbox" id="emoji" name="emoji"> Add emoji bursts on keywords like shop, love, or fire</label>
+
+      <h2>Frame</h2>
+      <div class="toggle" role="group" aria-label="Frame">
+        <button type="button" id="land" class="on">Landscape</button>
+        <button type="button" id="vert">Vertical</button>
+      </div>
+
+      <button type="submit" class="go" id="go">Make it</button>
+      <div class="status" id="status"></div>
+      <div class="bar" id="bar"><i></i></div>
+    </form>
+
+    <div class="result" id="result">
+      <video id="player" controls playsinline></video>
+      <a class="save" id="save" download="captioned.mp4">Save video</a>
+    </div>
+  </div>
+  <script>
+    const form = document.getElementById("form");
+    const fileInput = document.getElementById("file");
+    const drop = document.getElementById("drop");
+    const fileName = document.getElementById("fileName");
+    const statusEl = document.getElementById("status");
+    const bar = document.getElementById("bar");
+    const barI = bar.querySelector("i");
+    const result = document.getElementById("result");
+    const player = document.getElementById("player");
+    const save = document.getElementById("save");
+    const go = document.getElementById("go");
+    let style = "{{ default_style }}";
+    let color = "{{ default_palette }}";
+    let vertical = false;
+    let animation = "";
+    let placement = "auto";
+    const maxBytes = {{ max_mb }} * 1024 * 1024;
+
+    drop.addEventListener("click", () => fileInput.click());
+    drop.addEventListener("dragover", ev => { ev.preventDefault(); drop.classList.add("drag"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("drag"));
+    drop.addEventListener("drop", ev => {
+      ev.preventDefault(); drop.classList.remove("drag");
+      if (ev.dataTransfer.files[0]) { fileInput.files = ev.dataTransfer.files; showName(); }
+    });
+    fileInput.addEventListener("change", showName);
+    function showName(){ fileName.textContent = fileInput.files[0] ? fileInput.files[0].name : ""; }
+
+    document.querySelectorAll(".style").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".style").forEach(b => { b.classList.remove("selected"); b.setAttribute("aria-pressed","false"); });
+        btn.classList.add("selected"); btn.setAttribute("aria-pressed","true");
+        style = btn.dataset.style;
+      });
+    });
+    const colorLabel = document.getElementById("colorLabel");
+    document.querySelectorAll(".swatch").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".swatch").forEach(b => b.classList.remove("selected"));
+        btn.classList.add("selected");
+        color = btn.dataset.color;
+        document.getElementById("hex").value = "";
+        colorLabel.textContent = btn.getAttribute("aria-label");
+      });
+    });
+    document.getElementById("hex").addEventListener("input", ev => {
+      const v = ev.target.value.trim();
+      if (v) {
+        color = v;
+        document.querySelectorAll(".swatch").forEach(b => b.classList.remove("selected"));
+        colorLabel.textContent = v;
+      }
+    });
+    document.querySelectorAll(".pill[data-animation]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".pill[data-animation]").forEach(b => { b.classList.remove("selected"); b.setAttribute("aria-pressed","false"); });
+        btn.classList.add("selected"); btn.setAttribute("aria-pressed","true");
+        animation = btn.dataset.animation || "";
+      });
+    });
+    document.querySelectorAll("#placements .pill").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll("#placements .pill").forEach(b => { b.classList.remove("selected"); b.setAttribute("aria-pressed","false"); });
+        btn.classList.add("selected"); btn.setAttribute("aria-pressed","true");
+        placement = btn.dataset.placement || "auto";
+      });
+    });
+    document.getElementById("land").addEventListener("click", () => setOrient(false));
+    document.getElementById("vert").addEventListener("click", () => setOrient(true));
+    function setOrient(v){
+      vertical = v;
+      document.getElementById("land").classList.toggle("on", !v);
+      document.getElementById("vert").classList.toggle("on", v);
+    }
+
+    function setStatus(msg, err){
+      statusEl.textContent = msg || "";
+      statusEl.className = "status" + (err ? " err" : "");
+    }
+    function setProgress(n){
+      bar.style.display = "block";
+      barI.style.width = Math.max(0, Math.min(100, n)) + "%";
+    }
+
+    form.addEventListener("submit", async ev => {
+      ev.preventDefault();
+      if (!fileInput.files[0]) { setStatus("Please upload a video or an image first.", true); return; }
+      if (fileInput.files[0].size > maxBytes) { setStatus("Please keep files to {{ max_mb }} MB or less.", true); return; }
+      const data = new FormData();
+      data.append("file", fileInput.files[0]);
+      data.append("style", style);
+      if (color) data.append("color", color);
+      const text = document.getElementById("text").value.trim();
+      if (text) data.append("text", text);
+      const audio = document.getElementById("audio").files[0];
+      if (audio) data.append("audio", audio);
+      data.append("vertical", vertical ? "1" : "0");
+      if (animation) data.append("animation", animation);
+      if (placement) data.append("placement", placement);
+      const lang = document.getElementById("lang").value;
+      if (lang) data.append("lang", lang);
+      const cta = document.getElementById("cta").value.trim();
+      if (cta) data.append("cta", cta);
+      if (document.getElementById("emoji").checked) data.append("emoji", "auto");
+
+      go.disabled = true;
+      result.style.display = "none";
+      if (player.src) { URL.revokeObjectURL(player.src); player.removeAttribute("src"); }
+      setStatus("Starting…"); setProgress(8);
+
+      try {
+        const res = await fetch("/api/render", { method: "POST", body: data });
+        const body = await res.json();
+        if (!res.ok) { setStatus(body.error || "Could not start.", true); go.disabled = false; return; }
+        await poll(body.id);
+      } catch (e) {
+        setStatus("Network error. Please try again.", true);
+        go.disabled = false;
+      }
+    });
+
+    async function poll(id){
+      for (;;) {
+        const res = await fetch("/api/jobs/" + id);
+        if (!res.ok) { setStatus("Lost the job. Please try again.", true); go.disabled = false; return; }
+        const job = await res.json();
+        setStatus(job.message || job.status);
+        setProgress(job.progress || 10);
+        if (job.status === "done" && job.download) {
+          const vid = await fetch(job.download);
+          const blob = await vid.blob();
+          const url = URL.createObjectURL(blob);
+          player.src = url;
+          save.href = url;
+          result.style.display = "block";
+          setStatus("Ready.");
+          setProgress(100);
+          go.disabled = false;
+          result.scrollIntoView({ behavior: "smooth", block: "start" });
+          return;
+        }
+        if (job.status === "error") {
+          setStatus(job.error || job.message || "Something went wrong.", true);
+          go.disabled = false;
+          return;
+        }
+        await new Promise(r => setTimeout(r, 900));
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+flask>=3.0,<4
+faster-whisper>=1.1,<2
+numpy>=1.26
+soundfile>=0.12
+opencv-python-headless>=4.8
+pillow>=10

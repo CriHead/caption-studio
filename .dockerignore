@@ -1,0 +1,10 @@
+.venv
+__pycache__
+*.py[cod]
+.git
+.gitignore
+tmp
+tests
+models/faster-whisper
+*.mp4
+.pytest_cache
