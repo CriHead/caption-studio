@@ -8,8 +8,12 @@ import { renderMp4 } from "./render.js";
 import { clearSession, loadSession, saveCaptions, saveMedia, saveSettings, saveVoice } from "./session.js";
 import { transcribeAudio } from "./transcribe.js";
 
-const MAX_BYTES = 50 * 1024 * 1024;
-const MAX_SECONDS = 60;
+const MAX_BYTES = 300 * 1024 * 1024;
+const MAX_SECONDS = 5 * 60;
+const OUTPUTS = {
+  "720": { landscape: [1280, 720], vertical: [720, 1280], bitrate: 4_500_000, label: "720p" },
+  "1080": { landscape: [1920, 1080], vertical: [1080, 1920], bitrate: 8_000_000, label: "1080p" },
+};
 const STILL_SECONDS = 6;
 const SCRIPT_LANGS = new Set(["ar", "he", "hi", "ru", "el", "zh", "ja", "ko"]);
 
@@ -29,7 +33,6 @@ const save = document.getElementById("save");
 const go = document.getElementById("go");
 const canvas = document.getElementById("stage");
 const ctx = canvas.getContext("2d", { alpha: false });
-const previewSection = document.getElementById("previewSection");
 const playBtn = document.getElementById("play");
 const scrub = document.getElementById("scrub");
 const timeLabel = document.getElementById("timeLabel");
@@ -65,6 +68,9 @@ const state = {
   animation: "",
   placement: "auto",
   vertical: false,
+  quality: "720",
+  motion: "",
+  letterbox: false,
   kind: null,
   file: null,
   image: null,
@@ -300,6 +306,31 @@ function wire() {
     syncScrub();
   });
   go.addEventListener("click", () => makeVideo());
+  document.body.addEventListener("click", (event) => {
+    const step = event.target.closest("[data-step]");
+    if (step?.dataset.step) goTo(step.dataset.step);
+    const next = event.target.closest("[data-next]");
+    if (next?.dataset.next) goTo(next.dataset.next);
+  });
+  document.getElementById("quality").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-quality]");
+    if (!button) return;
+    state.quality = button.dataset.quality === "1080" ? "1080" : "720";
+    document.querySelectorAll("[data-quality]").forEach((node) => node.classList.toggle("on", node === button));
+    resizeCanvas();
+    rememberSettings();
+    restartPreview();
+  });
+  document.getElementById("motion").addEventListener("change", () => {
+    state.motion = document.getElementById("motion").value;
+    rememberSettings();
+    restartPreview();
+  });
+  document.getElementById("letterbox").addEventListener("change", () => {
+    state.letterbox = document.getElementById("letterbox").checked;
+    rememberSettings();
+    restartPreview();
+  });
 }
 
 function selectGroup(selector, button, kind) {
@@ -322,13 +353,32 @@ function setOrient(vertical, options = {}) {
   }
 }
 
+function outputSpec() {
+  const choice = OUTPUTS[state.quality] || OUTPUTS["720"];
+  const [width, height] = state.vertical ? choice.vertical : choice.landscape;
+  return { width, height, bitrate: choice.bitrate, label: choice.label };
+}
+
 function resizeCanvas() {
-  const width = state.vertical ? 720 : 1280;
-  const height = state.vertical ? 1280 : 720;
+  const { width, height } = outputSpec();
   if (canvas.width !== width || canvas.height !== height) {
     canvas.width = width;
     canvas.height = height;
   }
+}
+
+function goTo(step) {
+  if (step !== "upload" && !state.file) {
+    setStatus("Add a photo or video first.", true);
+    return;
+  }
+  document.querySelectorAll("[data-step]").forEach((node) => node.classList.toggle("on", node.dataset.step === step));
+  document.querySelectorAll("[data-step-panel]").forEach((node) => {
+    node.hidden = node.dataset.stepPanel !== step;
+  });
+  if (step === "captions") renderLines();
+  if (step === "export") updateExportSummary();
+  state.step = step;
 }
 
 function setStatus(message, isError = false) {
@@ -364,6 +414,9 @@ function currentSettings() {
     animation: state.animation,
     placement: state.placement,
     vertical: state.vertical,
+    quality: state.quality,
+    motion: state.motion,
+    letterbox: state.letterbox,
     lang: langEl.value,
     model: modelEl.value,
     cta: ctaEl.value,
@@ -464,7 +517,6 @@ async function restoreSession() {
     } else if (state.kind === "video") {
       attachPreviewUrl(file);
     }
-    previewSection.hidden = false;
     studio.duration = state.duration;
     studio.transcript = state.transcript;
     studio.words = activeWords();
@@ -492,6 +544,9 @@ function applySettings(settings) {
   state.animation = settings.animation || "";
   state.placement = settings.placement || "auto";
   state.vertical = Boolean(settings.vertical);
+  state.quality = settings.quality === "1080" ? "1080" : "720";
+  state.motion = settings.motion || "";
+  state.letterbox = Boolean(settings.letterbox);
   state.scrubTime = Number.isFinite(settings.scrubTime) ? settings.scrubTime : state.scrubTime;
   textEl.value = settings.text || "";
   hexEl.value = settings.hex || "";
@@ -499,6 +554,13 @@ function applySettings(settings) {
   emojiEl.checked = Boolean(settings.emoji);
   if (settings.lang) langEl.value = settings.lang;
   if (settings.model) modelEl.value = settings.model;
+  const motion = document.getElementById("motion");
+  if (motion) motion.value = state.motion;
+  const letter = document.getElementById("letterbox");
+  if (letter) letter.checked = state.letterbox;
+  document.querySelectorAll("[data-quality]").forEach((node) => {
+    node.classList.toggle("on", node.dataset.quality === state.quality);
+  });
   studio.styleId = state.styleId;
   reflectControls();
   setOrient(state.vertical, { silent: true });
@@ -550,7 +612,6 @@ async function startOver() {
   ctaEl.value = "";
   emojiEl.checked = false;
   heardEl.textContent = "A few short words work best.";
-  previewSection.hidden = true;
   showFileName();
   applySettings({
     styleId: catalog.defaultStyle,
@@ -558,9 +619,13 @@ async function startOver() {
     animation: "",
     placement: "auto",
     vertical: false,
+    quality: "720",
+    motion: "",
+    letterbox: false,
     lang: "auto",
     model: "tiny",
   });
+  goTo("upload");
   studio.words = [];
   studio.transcript = "";
   studio.restored = false;
@@ -578,6 +643,8 @@ function sameFile(a, b) {
 function showFileName() {
   fileName.textContent = state.file ? state.file.name : "";
   document.getElementById("reset").hidden = !state.file;
+  document.getElementById("stageEmpty").hidden = Boolean(state.file);
+  document.getElementById("toCaptions").disabled = !state.file;
   studio.fileName = state.file ? state.file.name : "";
 }
 
@@ -598,7 +665,7 @@ async function onFile(file) {
   if (sameFile(state.file, file)) return;
   speechJob += 1;
   if (file.size > MAX_BYTES) {
-    setStatus("Please keep files to 50 MB or less.", true);
+    setStatus("Please keep files to 300 MB or less.", true);
     return;
   }
   stopPlay();
@@ -632,7 +699,7 @@ async function onFile(file) {
         throw new Error("Could not read the length of that video.");
       }
       if (meta.duration > MAX_SECONDS + 0.25) {
-        throw new Error(`Please keep videos to ${MAX_SECONDS} seconds or less (this one is ${Math.round(meta.duration)}s).`);
+        throw new Error(`Please keep videos to 5 minutes or less (this one is ${Math.round(meta.duration / 60)} min).`);
       }
       state.duration = meta.duration;
       state.sourceWidth = meta.width;
@@ -649,7 +716,6 @@ async function onFile(file) {
       throw new Error("Please upload a video (mp4, mov, webm) or an image (png, jpg, webp).");
     }
     if (job !== state.job) return;
-    previewSection.hidden = false;
     studio.duration = state.duration;
     state.scrubTime = Math.min(0.35, state.duration * 0.15);
     await rememberMedia();
@@ -672,7 +738,7 @@ async function onAudio(file) {
   }
   if (sameFile(state.voiceFile, file)) return;
   if (file.size > MAX_BYTES) {
-    setStatus("Please keep files to 50 MB or less.", true);
+    setStatus("Please keep files to 300 MB or less.", true);
     return;
   }
   speechJob += 1;
@@ -742,6 +808,7 @@ function scheduleSpeech() {
     studio.words = state.heardWords;
     studio.device = result.device || "";
     studio.model = result.model || "";
+    studio.chunkCount = result.chunkCount || 1;
     studio.transcribeMs = performance.now() - started;
     heardEl.textContent = textEl.value.trim()
       ? "Using the caption you typed."
@@ -751,12 +818,80 @@ function scheduleSpeech() {
       ? `Transcript ready${result.device ? ` (${result.device})` : ""}. Preview is on this device.`
       : "No speech detected. Type a caption above.");
     rememberCaptions();
+    renderLines();
     return restartPreview();
   }).catch((error) => {
     if (job !== speechJob) return;
     studio.error = error.message;
     setStatus(error.message || "Could not transcribe that audio. You can type the caption instead.", true);
   });
+}
+
+function renderLines() {
+  const root = document.getElementById("lines");
+  if (!root) return;
+  root.replaceChildren();
+  if (!state.heardWords.length) {
+    const note = document.createElement("p");
+    note.className = "hint";
+    note.textContent = "The transcript shows up here. You can correct any line.";
+    root.append(note);
+    return;
+  }
+  const groups = groupWords(state.heardWords, 5);
+  groups.forEach((group) => {
+    const row = document.createElement("label");
+    row.className = "line";
+    const time = document.createElement("span");
+    time.textContent = clock(group.start);
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = group.words.map((word) => word.text).join(" ");
+    input.addEventListener("change", () => commitLines());
+    row.append(time, input);
+    root.append(row);
+  });
+}
+
+function commitLines() {
+  const inputs = [...document.querySelectorAll("#lines input")];
+  const groups = groupWords(state.heardWords, 5);
+  const next = [];
+  inputs.forEach((input, index) => {
+    const group = groups[index];
+    if (!group) return;
+    const tokens = input.value.trim().split(/\s+/).filter(Boolean);
+    if (!tokens.length) return;
+    const span = Math.max(0.2, group.end - group.start);
+    const slot = span / tokens.length;
+    tokens.forEach((token, i) => {
+      const start = group.start + i * slot;
+      next.push({ text: token, start, end: start + slot });
+    });
+  });
+  if (!next.length) return;
+  state.heardWords = next;
+  state.transcript = next.map((word) => word.text).join(" ");
+  studio.words = activeWords();
+  studio.transcript = state.transcript;
+  heardEl.textContent = textEl.value.trim() ? "Using the caption you typed." : heardLine();
+  rememberCaptions();
+  paint();
+}
+
+function updateExportSummary() {
+  const node = document.getElementById("exportSummary");
+  if (!node) return;
+  if (!state.file) {
+    node.textContent = "Add a clip to export.";
+    return;
+  }
+  const spec = outputSpec();
+  const minutes = Math.floor(state.duration / 60);
+  const seconds = Math.round(state.duration % 60);
+  const length = minutes ? `${minutes}m ${seconds}s` : `${seconds}s`;
+  const orient = state.vertical ? "vertical" : "landscape";
+  node.textContent = `${state.file.name} · ${length} · ${spec.label} ${orient}. Longer clips and 1080p take more time on a phone.`;
 }
 
 function activeWords() {
@@ -782,7 +917,7 @@ function currentLook(script) {
     look.bodyFile = scriptFile;
     look.displayFile = scriptFile;
   }
-  if (!state.animation) look.motion = look.motion;
+  if (state.motion) look.motion = state.motion;
   return { look, animation: state.animation || look.animation };
 }
 
@@ -800,7 +935,6 @@ async function restartPreview() {
   ];
   await ensureFonts(files);
   if (emojiEl.checked) await ensureEmoji(words);
-  previewSection.hidden = false;
   paint();
   syncScrub();
   studio.words = words;
@@ -831,7 +965,7 @@ function sceneAt(time) {
     cta: ctaEl.value.trim(),
     emojiOn: emojiEl.checked,
     emojiImages,
-    letterbox: look.letterbox,
+    letterbox: look.letterbox || state.letterbox,
     script,
   };
 }
@@ -933,7 +1067,7 @@ async function makeVideo() {
     return;
   }
   if (state.file.size > MAX_BYTES) {
-    setStatus("Please keep files to 50 MB or less.", true);
+    setStatus("Please keep files to 300 MB or less.", true);
     return;
   }
   const words = activeWords();
@@ -948,19 +1082,15 @@ async function makeVideo() {
   studio.phase = "rendering";
   studio.error = null;
   hideResult();
-  setStatus("Rendering a 720p MP4 on this device…");
+  const spec = outputSpec();
+  setStatus(`Rendering a ${spec.label} MP4 on this device…`);
   setProgress(0.02);
   const started = performance.now();
   try {
     await restartPreview();
     const script = activeScript(words);
     const { look, animation } = currentLook(script);
-    const audioSource = state.voiceFile || (state.kind === "video" ? state.file : null);
-    let audioBuffer = null;
-    if (audioSource) {
-      const decoded = await decodeAudio(audioSource);
-      audioBuffer = decoded ? sliceAudio(decoded, state.duration) : null;
-    }
+    const audioFile = state.voiceFile || (state.kind === "video" ? state.file : null);
     const scene = {
       words,
       groups: groupWords(words, look.wordsPerLine),
@@ -970,23 +1100,24 @@ async function makeVideo() {
       cta: ctaEl.value.trim(),
       emojiOn: emojiEl.checked,
       emojiImages,
-      letterbox: look.letterbox,
+      letterbox: look.letterbox || state.letterbox,
       script,
     };
     const rendered = await renderMp4({
-      width: canvas.width,
-      height: canvas.height,
+      width: spec.width,
+      height: spec.height,
+      bitrate: spec.bitrate,
       duration: state.duration,
       still: state.kind === "image",
       image: state.image,
       imageWidth: state.sourceWidth,
       imageHeight: state.sourceHeight,
       file: state.file,
-      audioBuffer,
+      audioFile,
       scene,
     }, (ratio) => {
       setProgress(0.05 + ratio * 0.95);
-      setStatus(`Rendering a 720p MP4 on this device… ${Math.round(ratio * 100)}%`);
+      setStatus(`Rendering a ${spec.label} MP4 on this device… ${Math.round(ratio * 100)}%`);
     });
     const blob = rendered.blob;
     studio.renderMs = performance.now() - started;
@@ -999,7 +1130,7 @@ async function makeVideo() {
     player.src = state.resultUrl;
     save.href = state.resultUrl;
     result.style.display = "block";
-    const heardAudio = Boolean(audioSource);
+    const heardAudio = Boolean(audioFile);
     const audioNote = heardAudio && !rendered.audioCodec
       ? " This browser could not add the sound, so the file is silent."
       : "";

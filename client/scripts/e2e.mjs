@@ -54,6 +54,7 @@ const logs = [];
 const browser = await puppeteer.launch({
   executablePath: chrome,
   headless: true,
+  protocolTimeout: 600000,
   args: [
     "--no-sandbox",
     "--disable-dev-shm-usage",
@@ -118,10 +119,11 @@ try {
     scrub.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await new Promise((resolve) => setTimeout(resolve, 400));
-  await page.evaluate(() => document.getElementById("previewSection").scrollIntoView({ block: "center" }));
+  await page.evaluate(() => document.getElementById("stageFrame").scrollIntoView({ block: "center" }));
   await page.screenshot({ path: path.join(artifacts, "caption-studio-preview.png") });
 
   const renderStart = Date.now();
+  await page.click('[data-step="export"]');
   await page.click("#go");
   await page.waitForFunction(() => window.__studio?.lastBlob || window.__studio?.error, { timeout: 4 * 60 * 1000 });
   const rendered = await page.evaluate(async () => {
@@ -199,7 +201,8 @@ try {
   await photoPage.goto(origin, { waitUntil: "networkidle0" });
   const photoInput = await photoPage.$("#file");
   await photoInput.uploadFile(path.join(work, "photo.png"));
-  await photoPage.waitForSelector("#previewSection:not([hidden])", { timeout: 20000 });
+  await photoPage.waitForFunction(() => window.__studio?.fileName, { timeout: 20000 });
+  await photoPage.click('[data-step="captions"]');
   await photoPage.type("#text", "Hello studio");
   await photoPage.waitForFunction(() => {
     const canvas = document.getElementById("stage");
@@ -212,7 +215,7 @@ try {
     }
     return bright > 30;
   }, { timeout: 20000 });
-  await photoPage.evaluate(() => document.getElementById("previewSection").scrollIntoView({ block: "center" }));
+  await photoPage.evaluate(() => document.getElementById("stageFrame").scrollIntoView({ block: "center" }));
   await new Promise((resolve) => setTimeout(resolve, 250));
   await photoPage.screenshot({ path: path.join(artifacts, "caption-studio-mobile-photo.png") });
   const mobile = await photoPage.evaluate(() => ({

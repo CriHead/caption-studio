@@ -41,6 +41,7 @@ const logs = [];
 const browser = await puppeteer.launch({
   executablePath: chrome,
   headless: true,
+  protocolTimeout: 600000,
   args: ["--no-sandbox", "--disable-dev-shm-usage"],
 });
 
@@ -65,7 +66,12 @@ try {
     throw new Error(`Unexpected transcript: ${before.transcript}`);
   }
 
+  await page.click('[data-step="style"]');
   await page.click('[data-style="bold-pop"]');
+  await page.evaluate(() => {
+    document.querySelector("#animations").closest("details").open = true;
+    document.querySelector("#placements").closest("details").open = true;
+  });
   await page.click('[data-animation="pop"]');
   await page.click('[data-placement="center"]');
   await page.type("#cta", "Shop now");
