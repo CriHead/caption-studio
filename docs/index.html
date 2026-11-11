@@ -3,12 +3,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0c0c0e">
+  <meta name="theme-color" content="#0B1020">
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem("caption-studio-theme");
+        var light = window.matchMedia("(prefers-color-scheme: light)").matches;
+        var theme = saved === "light" || saved === "dark" ? saved : (light ? "light" : "dark");
+        document.documentElement.dataset.theme = theme;
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.content = theme === "light" ? "#F6F3EE" : "#0B1020";
+      } catch (e) {}
+    })();
+  </script>
   <meta name="description" content="Add captions to a photo or video in your browser. Nothing is uploaded.">
   <title>Caption Studio</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect rx='8' width='32' height='32' fill='%2316161a'/%3E%3Crect x='8' y='11' width='16' height='10' rx='2' fill='none' stroke='%23e4b15a' stroke-width='1.6'/%3E%3C/svg%3E">
-  <script type="module" crossorigin src="./assets/index-C5Y4U9uq.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-Cg0XoX7T.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect rx='8' width='32' height='32' fill='%230B1020'/%3E%3Crect x='8' y='11' width='16' height='10' rx='2' fill='none' stroke='%23A78BFA' stroke-width='1.6'/%3E%3C/svg%3E">
+  <script type="module" crossorigin src="./assets/index-C-IcmCXF.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-Bwp2IV6N.css">
 </head>
 <body>
   <div class="app">
@@ -20,7 +32,10 @@
           <p>Everything stays on this device.</p>
         </div>
       </div>
-      <button type="button" class="ghost" id="reset" hidden>Start over</button>
+      <div class="top-actions">
+        <button type="button" class="ghost" id="theme" aria-pressed="false">Light</button>
+        <button type="button" class="ghost" id="reset" hidden>Start over</button>
+      </div>
     </header>
 
     <div class="workspace">

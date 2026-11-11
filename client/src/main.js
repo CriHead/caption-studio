@@ -305,6 +305,27 @@ function wire() {
     state.scrubTime = previewVideo.currentTime || 0;
     syncScrub();
   });
+  const themeBtn = document.getElementById("theme");
+  const themeMeta = document.querySelector('meta[name="theme-color"]');
+  const paintThemeButton = () => {
+    const light = document.documentElement.dataset.theme === "light";
+    themeBtn.textContent = light ? "Dark" : "Light";
+    themeBtn.setAttribute("aria-pressed", light ? "true" : "false");
+    themeBtn.setAttribute("aria-label", light ? "Switch to dark theme" : "Switch to light theme");
+    if (themeMeta) themeMeta.content = light ? "#F6F3EE" : "#0B1020";
+  };
+  paintThemeButton();
+  themeBtn.addEventListener("click", () => {
+    const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem("caption-studio-theme", next);
+    paintThemeButton();
+  });
+  window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", (event) => {
+    if (localStorage.getItem("caption-studio-theme")) return;
+    document.documentElement.dataset.theme = event.matches ? "light" : "dark";
+    paintThemeButton();
+  });
   go.addEventListener("click", () => makeVideo());
   document.body.addEventListener("click", (event) => {
     const step = event.target.closest("[data-step]");
