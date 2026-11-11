@@ -85,6 +85,11 @@ function contextFor(sampleRate) {
   return audioCtx;
 }
 
+/** Call from the Play tap so a suspended iOS audio context can start. */
+export function resumeAudioContext() {
+  if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+}
+
 /**
  * Walk the audio track in short windows and hand back 16 kHz mono.
  * The whole file is never copied into one ArrayBuffer, and each window

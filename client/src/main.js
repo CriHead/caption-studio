@@ -3,7 +3,7 @@ import { groupWords, wordsFromText, chunksToWords } from "./captions.js";
 import { drawFrame, drawOverlay, paletteById, resolveLook } from "./draw.js";
 import { burstFiles, emojiFileForWord } from "./emoji.js";
 import { ensureFonts, familyName, scriptFontFile, scriptForText } from "./fonts.js";
-import { eachPcmWindow, fileKind, loadImage } from "./media.js";
+import { eachPcmWindow, fileKind, loadImage, resumeAudioContext } from "./media.js";
 import { renderMp4 } from "./render.js";
 import { clearSession, loadSession, saveCaptions, saveMedia, saveSettings, saveVoice } from "./session.js";
 import { releaseTranscriber, transcribeAudio } from "./transcribe.js";
@@ -35,6 +35,7 @@ const canvas = document.getElementById("stage");
 const ctx = canvas.getContext("2d", { alpha: true });
 const stageFrame = document.getElementById("stageFrame");
 const BUSY_KEY = "caption-studio-busy";
+const HEAVY_WORK = new Set(["transcribe", "render"]);
 const playBtn = document.getElementById("play");
 const scrub = document.getElementById("scrub");
 const timeLabel = document.getElementById("timeLabel");
@@ -86,17 +87,24 @@ const state = {
   transcript: "",
   job: 0,
   playing: false,
+  userMuted: false,
+  voiceUrl: "",
   scrubTime: 0.2,
   resultUrl: "",
 };
 
 let lastPaintKey = "";
+let restorePromise = Promise.resolve();
 
 const previewVideo = document.getElementById("previewVideo");
+const previewVoice = document.getElementById("previewVoice");
 previewVideo.playsInline = true;
-previewVideo.muted = true;
 previewVideo.autoplay = false;
 previewVideo.preload = "metadata";
+previewVideo.muted = false;
+previewVideo.volume = 1;
+previewVoice.preload = "metadata";
+previewVoice.volume = 1;
 
 const emojiImages = {};
 
@@ -112,13 +120,20 @@ function lightDevice() {
 }
 
 function markBusy(reason) {
-  try { localStorage.setItem(BUSY_KEY, reason || "1"); } catch { /* private mode */ }
+  if (!HEAVY_WORK.has(reason)) return;
+  try { localStorage.setItem(BUSY_KEY, reason); } catch { /* private mode */ }
 }
 
 function clearBusy(reason) {
   try {
     if (reason && localStorage.getItem(BUSY_KEY) !== reason) return;
     localStorage.removeItem(BUSY_KEY);
+  } catch { /* ignore */ }
+}
+
+function clearBusyOnLeave() {
+  try {
+    if (!HEAVY_WORK.has(localStorage.getItem(BUSY_KEY))) clearBusy();
   } catch { /* ignore */ }
 }
 
@@ -134,22 +149,26 @@ function boot() {
     event.preventDefault();
     friendly();
   });
+  const releaseIfHidden = () => {
+    if (document.visibilityState === "hidden") clearBusyOnLeave();
+  };
+  window.addEventListener("pagehide", clearBusyOnLeave);
+  document.addEventListener("visibilitychange", releaseIfHidden);
   if (lightDevice()) modelEl.value = "tiny";
-  try {
-    if (localStorage.getItem(BUSY_KEY)) {
-      showRecovery();
-      studio.ready = true;
-      studio.blocked = true;
-      return;
-    }
-  } catch { /* ignore */ }
-  restoreSession();
+  let marker = "";
+  try { marker = localStorage.getItem(BUSY_KEY) || ""; } catch { /* private mode */ }
+  if (HEAVY_WORK.has(marker)) {
+    showRecovery();
+    studio.blocked = true;
+  } else {
+    clearBusy();
+  }
+  restorePromise = restoreSession();
 }
 
 function showRecovery() {
   document.getElementById("recovery").hidden = false;
-  document.getElementById("stageEmpty").hidden = false;
-  setStatus("Last session stopped unexpectedly.");
+  setStatus("Transcription or export was interrupted. Your clip is still on this device.");
 }
 
 function hideRecovery() {
@@ -159,6 +178,7 @@ function hideRecovery() {
 async function resumeSaved(lighter) {
   hideRecovery();
   clearBusy();
+  studio.blocked = false;
   if (lighter) {
     state.quality = "720";
     modelEl.value = "tiny";
@@ -167,8 +187,15 @@ async function resumeSaved(lighter) {
     });
     rememberSettings();
   }
-  studio.blocked = false;
-  await restoreSession();
+  await restorePromise;
+  if (!state.file) {
+    restorePromise = restoreSession();
+    await restorePromise;
+  }
+  if (state.kind === "video" && state.file && !previewVideo.currentSrc) attachPreviewUrl(state.file);
+  if (state.voiceFile && !previewVoice.currentSrc) attachVoiceUrl(state.voiceFile);
+  applyPreviewLevels();
+  if (state.file) await restartPreview();
 }
 
 function buildChoices() {
@@ -352,20 +379,23 @@ function wire() {
   document.getElementById("land").addEventListener("click", () => setOrient(false));
   document.getElementById("vert").addEventListener("click", () => setOrient(true));
   playBtn.addEventListener("click", togglePlay);
+  document.getElementById("mute").addEventListener("click", toggleMute);
   scrub.addEventListener("input", () => {
     state.playing = false;
     playBtn.textContent = "Play";
     previewVideo.pause();
-    clearBusy("play");
+    previewVoice.pause();
     state.scrubTime = (Number(scrub.value) / 1000) * state.duration;
     if (state.kind === "video") {
-      previewVideo.currentTime = state.scrubTime;
+      try { previewVideo.currentTime = state.scrubTime; } catch { /* not ready yet */ }
+    }
+    if (state.voiceFile) {
+      try { previewVoice.currentTime = state.scrubTime; } catch { /* not ready yet */ }
     }
     syncScrub();
     paint();
   });
   previewVideo.addEventListener("loadedmetadata", () => {
-    if (!state.playing) clearBusy("preview");
     resizeCanvas();
     if (state.kind !== "video" || state.playing) return;
     if (Math.abs((previewVideo.currentTime || 0) - state.scrubTime) > 0.08) {
@@ -607,12 +637,10 @@ function releaseImage() {
 
 async function restoreSession() {
   try {
-    markBusy("restore");
     setStatus("Opening your saved clip…");
     const saved = await loadSession();
     const media = saved?.media;
     if (!media?.blob) {
-      clearBusy("restore");
       setStatus("Choose a photo or a short video to begin.");
       return;
     }
@@ -631,6 +659,10 @@ async function restoreSession() {
       state.voiceFile = new File([saved.voice.blob], saved.voice.name || "voice", {
         type: saved.voice.type || saved.voice.blob.type || "",
       });
+      attachVoiceUrl(state.voiceFile);
+    } else {
+      state.voiceFile = null;
+      attachVoiceUrl(null);
     }
     applySettings(saved.settings || {});
     showFileName();
@@ -647,14 +679,13 @@ async function restoreSession() {
     studio.words = activeWords();
     studio.restored = true;
     resizeCanvas();
+    applyPreviewLevels();
     await restartPreview();
-    clearBusy("restore");
     updateReadButton();
     setStatus(state.heardWords.length || textEl.value.trim()
       ? "Your clip is back. Press play when you want to watch it."
       : "Your clip is back. Press Read the speech when you want captions.");
   } catch (error) {
-    clearBusy();
     console.warn("Could not restore the saved clip.", error);
     setStatus("Choose a photo or a short video to begin.");
   } finally {
@@ -724,6 +755,7 @@ async function startOver() {
   stopPlay();
   releaseImage();
   attachPreviewUrl(null);
+  attachVoiceUrl(null);
   hideResult();
   state.file = null;
   state.voiceFile = null;
@@ -822,10 +854,46 @@ function attachPreviewUrl(file) {
     previewVideo.load();
     return;
   }
-  markBusy("preview");
   state.videoUrl = URL.createObjectURL(file);
   previewVideo.preload = "metadata";
   previewVideo.src = state.videoUrl;
+  applyPreviewLevels();
+}
+
+function attachVoiceUrl(file) {
+  if (state.voiceUrl) URL.revokeObjectURL(state.voiceUrl);
+  state.voiceUrl = "";
+  previewVoice.pause();
+  if (!file) {
+    previewVoice.removeAttribute("src");
+    previewVoice.load();
+    applyPreviewLevels();
+    return;
+  }
+  state.voiceUrl = URL.createObjectURL(file);
+  previewVoice.preload = "metadata";
+  previewVoice.src = state.voiceUrl;
+  applyPreviewLevels();
+}
+
+function applyPreviewLevels() {
+  const voiceOn = Boolean(state.voiceFile);
+  previewVideo.muted = state.userMuted || voiceOn;
+  previewVideo.volume = 1;
+  previewVoice.muted = state.userMuted || !voiceOn;
+  previewVoice.volume = 1;
+  const button = document.getElementById("mute");
+  if (!button) return;
+  button.textContent = state.userMuted ? "Sound" : "Mute";
+  button.setAttribute("aria-pressed", state.userMuted ? "true" : "false");
+  button.setAttribute("aria-label", state.userMuted ? "Unmute preview" : "Mute preview");
+  studio.userMuted = state.userMuted;
+}
+
+function toggleMute() {
+  state.userMuted = !state.userMuted;
+  resumeAudioContext();
+  applyPreviewLevels();
 }
 
 async function onFile(file) {
@@ -888,6 +956,7 @@ async function onFile(file) {
 async function onAudio(file) {
   if (!file) {
     state.voiceFile = null;
+    attachVoiceUrl(null);
     if (state.kind === "image") state.duration = STILL_SECONDS;
     rememberVoice();
     restartPreview();
@@ -904,6 +973,7 @@ async function onAudio(file) {
     setStatus("Reading the voice track…");
     if (job !== state.job) return;
     state.voiceFile = file;
+    attachVoiceUrl(file);
     state.pcm = null;
     state.heardWords = [];
     state.transcript = "";
@@ -1227,14 +1297,19 @@ let playFrom = 0;
 
 function togglePlay() {
   if (!state.file) return;
+  resumeAudioContext();
+  applyPreviewLevels();
   if (state.playing) {
     stopPlay();
     return;
   }
   state.playing = true;
   playBtn.textContent = "Pause";
+  if (state.voiceFile) {
+    try { previewVoice.currentTime = state.scrubTime; } catch { /* the voice element may not be ready yet */ }
+    previewVoice.play().catch(() => {});
+  }
   if (state.kind === "video") {
-    markBusy("play");
     try { previewVideo.currentTime = state.scrubTime; } catch { /* the element may not be ready yet */ }
     previewVideo.play().then(() => {
       requestAnimationFrame(tickVideo);
@@ -1250,12 +1325,22 @@ function stopPlay() {
   state.playing = false;
   playBtn.textContent = "Play";
   previewVideo.pause();
-  clearBusy("play");
+  previewVoice.pause();
+}
+
+function syncVoiceClock(time) {
+  if (!state.voiceFile || !state.playing) return;
+  if (previewVoice.paused && !state.userMuted) previewVoice.play().catch(() => {});
+  if (Number.isFinite(previewVoice.duration) && time >= previewVoice.duration) return;
+  if (Math.abs((previewVoice.currentTime || 0) - time) > 0.35) {
+    try { previewVoice.currentTime = time; } catch { /* seek can wait */ }
+  }
 }
 
 function tickVideo() {
   if (!state.playing) return;
   state.scrubTime = previewVideo.currentTime || 0;
+  syncVoiceClock(state.scrubTime);
   paint();
   syncScrub();
   requestAnimationFrame(tickVideo);
@@ -1270,6 +1355,7 @@ function tickStill(now) {
     playOrigin = now;
   }
   state.scrubTime = time;
+  syncVoiceClock(time);
   paint();
   syncScrub();
   requestAnimationFrame(tickStill);

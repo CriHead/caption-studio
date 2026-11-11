@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0B1020">
   <script>
     (function () {
@@ -41,18 +41,20 @@
       <section class="preview-col">
         <div class="recovery" id="recovery" hidden>
           <h2>Last session stopped unexpectedly</h2>
-          <p class="hint">The page was closed while a video was open. Nothing was uploaded. You can show the same clip again, use lighter settings, or start fresh.</p>
+          <p class="hint">Transcription or export was interrupted. Your clip is still on this device.</p>
           <button type="button" class="primary" id="resume">Resume</button>
           <button type="button" class="ghost" id="lighter">Try lighter settings</button>
           <button type="button" class="ghost" id="forget">Start over</button>
         </div>
         <div class="stage" id="stageFrame">
-          <video id="previewVideo" playsinline muted preload="metadata"></video>
+          <video id="previewVideo" playsinline preload="metadata"></video>
+          <audio id="previewVoice" preload="metadata"></audio>
           <canvas id="stage" width="2" height="2"></canvas>
           <p class="stage-empty" id="stageEmpty">Upload a clip to see it here.</p>
         </div>
         <div class="transport">
           <button type="button" class="play" id="play" aria-label="Play preview">Play</button>
+          <button type="button" class="play" id="mute" aria-pressed="false" aria-label="Mute preview">Mute</button>
           <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Preview time">
           <span id="timeLabel">0:00</span>
         </div>
