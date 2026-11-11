@@ -41,4 +41,4 @@ RUN useradd --create-home --uid 1000 user \
 USER user
 
 EXPOSE 7860
-CMD ["python", "app.py", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["sh", "-c", "python app.py --host 0.0.0.0 --port ${PORT:-7860}"]
